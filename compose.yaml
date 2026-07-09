@@ -31,5 +31,28 @@ services:
     depends_on:
       - n8n
 
+  codex-worker:
+    build:
+      context: ./codex-worker
+    restart: always
+    environment:
+      - WORKER_PORT=3000
+      - CODEX_HOME=/home/codex/.codex
+      - REPOS_DIR=/work/repos
+      - JOBS_DIR=/work/jobs
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_OWNER=${GITHUB_OWNER}
+      - GITHUB_REPO=${GITHUB_REPO}
+      - DEFAULT_BASE_BRANCH=${DEFAULT_BASE_BRANCH:-main}
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - codex_home:/home/codex/.codex
+      - codex_worker_data:/work
+    depends_on:
+      - n8n
+
 volumes:
   n8n_data:
+  codex_home:
+  codex_worker_data:

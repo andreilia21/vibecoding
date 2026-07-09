@@ -3,14 +3,18 @@
 !.env.example
 
 local-files/
+worker-data/
+repos/
+jobs/
 
 .n8n/
 n8n_data/
 traefik_data/
+codex_home/
+codex_worker_data/
 
 .codex/
 .agents/
 
 *.log
 *.tmp
-
