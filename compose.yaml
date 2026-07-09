@@ -1,0 +1,35 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: always
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      - N8N_HOST=${NGROK_DOMAIN}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - N8N_EDITOR_BASE_URL=${N8N_PUBLIC_URL}
+      - WEBHOOK_URL=${N8N_PUBLIC_URL}/
+      - N8N_PROXY_HOPS=1
+      - NODE_ENV=production
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - TZ=${GENERIC_TIMEZONE}
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RESTRICT_FILE_ACCESS_TO=/files
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./local-files:/files
+  ngrok:
+    image: ngrok/ngrok:latest
+    restart: always
+    command:
+      - "http"
+      - "n8n:5678"
+      - "--url=${NGROK_DOMAIN}"
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    depends_on:
+      - n8n
+
+volumes:
+  n8n_data:

@@ -1,0 +1,93 @@
+name: Codex Jira Task
+
+on:
+  workflow_dispatch:
+    inputs:
+      jira_key:
+        required: true
+        type: string
+      jira_summary:
+        required: true
+        type: string
+      jira_description:
+        required: true
+        type: string
+      jira_url:
+        required: true
+        type: string
+      base_branch:
+        required: false
+        default: main
+        type: string
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.base_branch }}
+          fetch-depth: 0
+
+      - name: Create branch
+        run: |
+          safe_title="$(printf '%s' "${{ inputs.jira_summary }}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | sed -E 's/^-+|-+$//g' | cut -c1-50)"
+          branch="codex/${{ inputs.jira_key }}-${safe_title}"
+          echo "CODEX_BRANCH=$branch" >> "$GITHUB_ENV"
+          git switch -c "$branch"
+
+      - name: Run Codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: workspace-write
+          prompt: |
+            Implement Jira issue ${{ inputs.jira_key }}.
+
+            Jira URL:
+            ${{ inputs.jira_url }}
+
+            Summary:
+            ${{ inputs.jira_summary }}
+
+            Description:
+            ${{ inputs.jira_description }}
+
+            Requirements:
+            - Make the smallest correct code change.
+            - Follow this repository's existing conventions.
+            - Run relevant tests if available.
+            - Do not modify unrelated files.
+            - Leave the repository in a commit-ready state.
+
+      - name: Commit and push
+        id: commit
+        run: |
+          git config user.name "codex-agent"
+          git config user.email "codex-agent@users.noreply.github.com"
+
+          git add .
+          if git diff --cached --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git commit -m "${{ inputs.jira_key }}: implement requested change"
+          git push origin "$CODEX_BRANCH"
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        if: steps.commit.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --base "${{ inputs.base_branch }}" \
+            --head "$CODEX_BRANCH" \
+            --title "${{ inputs.jira_key }}: ${{ inputs.jira_summary }}" \
+            --body "Implemented by Codex from ${{ inputs.jira_url }}"
+

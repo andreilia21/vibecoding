@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+
+local-files/
+
+.n8n/
+n8n_data/
+traefik_data/
+
+.codex/
+.agents/
+
+*.log
+*.tmp
+
