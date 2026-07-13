@@ -1,0 +1,233 @@
+{
+  "name": "github-review-automation",
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "accessToken",
+        "owner": { "__rl": true, "value": "YOUR_GITHUB_OWNER", "mode": "name" },
+        "repository": { "__rl": true, "value": "YOUR_GITHUB_REPO", "mode": "name" },
+        "events": ["issue_comment"],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.githubTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "id": "65194079-09b6-4d6e-ae87-93b21f971d48",
+      "name": "GitHub Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json.body ?? $json;\nconst command = String(payload.comment?.body ?? '').trim();\nconst association = String(payload.comment?.author_association ?? '').toUpperCase();\nconst allowed = ['OWNER', 'MEMBER', 'COLLABORATOR'];\n\nif (payload.action !== 'created' || !payload.issue?.pull_request || !/^\\/codex\\s+fix$/i.test(command) || !allowed.includes(association)) {\n  return [];\n}\n\nconst source = [payload.issue.body, payload.issue.title].filter(Boolean).join('\\n');\nconst marker = source.match(/codex-jira-key:\\s*([A-Z][A-Z0-9]+-\\d+)/i);\nconst fallback = source.match(/\\b([A-Z][A-Z0-9]+-\\d+)\\b/i);\nconst jiraKey = (marker?.[1] ?? fallback?.[1] ?? '').toUpperCase();\nif (!jiraKey) {\n  throw new Error('Pull request is not linked to Jira. Add <!-- codex-jira-key: PROJECT-123 --> to the PR body.');\n}\n\nreturn [{ json: {\n  jiraKey,\n  prNumber: Number(payload.issue.number),\n  prUrl: payload.issue.html_url,\n  reviewCommandId: String(payload.comment.id),\n  requestedBy: String(payload.comment.user?.login ?? 'unknown')\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0],
+      "id": "acdf8851-1bf6-4442-906d-a141f84f4c5b",
+      "name": "Validate Review Command"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issue",
+        "operation": "transitions",
+        "issueKey": "={{ $('Validate Review Command').item.json.jiraKey }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [480, 0],
+      "id": "056a3bb3-573a-4569-afc7-3cbec10202ed",
+      "name": "Get In Progress Transitions",
+      "credentials": { "jiraSoftwareCloudOAuth2Api": { "id": "KnO2tRxIhCMr6mXx", "name": "Jira SW Cloud account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst target = transitions.find((item) => normalize(item.json.to?.name ?? item.json.name) === 'inprogress')\n  ?? transitions.find((item) => item.json.to?.statusCategory?.key === 'indeterminate');\nif (!target) {\n  const available = transitions.map((item) => `${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'}`).join(', ');\n  throw new Error(`Jira In Progress transition is not available. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 0],
+      "id": "a84d912c-5786-4bd4-a105-bc48a78e402d",
+      "name": "Select In Progress Transition"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issue",
+        "operation": "update",
+        "issueKey": "={{ $('Validate Review Command').item.json.jiraKey }}",
+        "updateFields": { "statusId": { "__rl": true, "value": "={{ $json.transitionId }}", "mode": "id" } },
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [960, 0],
+      "id": "987ef0c9-8a95-4fa4-a110-889cd447269f",
+      "name": "Move to In Progress",
+      "credentials": { "jiraSoftwareCloudOAuth2Api": { "id": "KnO2tRxIhCMr6mXx", "name": "Jira SW Cloud account" } }
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issueComment",
+        "operation": "add",
+        "issueKey": "={{ $('Validate Review Command').item.json.jiraKey }}",
+        "comment": "={{ `Codex started addressing review feedback from PR #${$('Validate Review Command').item.json.prNumber}. Requested by @${$('Validate Review Command').item.json.requestedBy}: ${$('Validate Review Command').item.json.prUrl}` }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [1200, 0],
+      "id": "025b3754-0591-4dad-b1ba-d99c87936d40",
+      "name": "Comment Review Started",
+      "credentials": { "jiraSoftwareCloudOAuth2Api": { "id": "KnO2tRxIhCMr6mXx", "name": "Jira SW Cloud account" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://codex-worker:3000/review-jobs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Validate Review Command').item.json) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, 0],
+      "id": "dd42124d-ee22-4d06-b040-85aed8cfb777",
+      "name": "Create Review Job"
+    },
+    {
+      "parameters": { "amount": 15, "unit": "seconds" },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1680, 0],
+      "id": "f9aeedce-7878-43b2-9006-2db49f250c9e",
+      "name": "Wait Before Poll",
+      "webhookId": "d3009a2d-d730-43cd-babb-320c7d9070e0"
+    },
+    {
+      "parameters": { "url": "=http://codex-worker:3000/jobs/{{ $json.id }}", "options": {} },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1920, 0],
+      "id": "586d7405-fe5d-45c2-ab30-105e8c429d3a",
+      "name": "Get Review Job"
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "conditions": [{ "id": "b64abb22-1d5f-4591-bc88-35f3da7d99ae", "leftValue": "={{ $json.status }}", "rightValue": "completed", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2160, 0],
+      "id": "e77f86bd-755f-464b-88ad-b9ed7fcad112",
+      "name": "Review Completed?"
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "conditions": [{ "id": "f247b125-a9e9-489f-9f51-025711ffb303", "leftValue": "={{ $json.status }}", "rightValue": "failed", "operator": { "type": "string", "operation": "equals" } }], "combinator": "and" },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2400, 140],
+      "id": "331c67b9-f0c2-4ae9-abf4-d7d22b62561e",
+      "name": "Review Failed?"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2", "resource": "issueComment", "operation": "add",
+        "issueKey": "={{ $('Validate Review Command').item.json.jiraKey }}",
+        "comment": "={{ `Codex addressed the review feedback and updated PR #${$json.prNumber}: ${$json.prUrl}${$json.step === 'no changes' ? '\\n\\nNo additional code changes were necessary.' : ''}` }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.jira", "typeVersion": 1, "position": [2400, -140],
+      "id": "ad3700e6-e3b5-471d-94c0-8011e3937bf8", "name": "Comment Review Success",
+      "credentials": { "jiraSoftwareCloudOAuth2Api": { "id": "KnO2tRxIhCMr6mXx", "name": "Jira SW Cloud account" } }
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2", "resource": "issueComment", "operation": "add",
+        "issueKey": "={{ $('Validate Review Command').item.json.jiraKey }}",
+        "comment": "={{ `Codex failed while addressing feedback from PR #${$('Validate Review Command').item.json.prNumber}: ${$json.error ?? 'Unknown worker error'}${$json.stderr ? `\\n\\n${$json.stderr}` : ''}` }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.jira", "typeVersion": 1, "position": [2640, 140],
+      "id": "28542602-4b07-43c4-b540-c84f47862035", "name": "Comment Review Failure",
+      "credentials": { "jiraSoftwareCloudOAuth2Api": { "id": "KnO2tRxIhCMr6mXx", "name": "Jira SW Cloud account" } }
+    },
+    {
+      "parameters": { "jiraVersion": "cloudOAuth2", "resource": "issue", "operation": "transitions", "issueKey": "={{ $('Validate Review Command').item.json.jiraKey }}", "additionalFields": {} },
+      "type": "n8n-nodes-base.jira", "typeVersion": 1, "position": [2640, -140],
+      "id": "29ae5ced-7481-4dfb-84ec-060944cbab80", "name": "Get Review Transitions",
+      "credentials": { "jiraSoftwareCloudOAuth2Api": { "id": "KnO2tRxIhCMr6mXx", "name": "Jira SW Cloud account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst target = transitions.find((item) => ['inreview', 'review', 'codereview', 'readyforreview'].includes(normalize(item.json.to?.name ?? item.json.name)))\n  ?? transitions.find((item) => normalize(item.json.to?.name ?? item.json.name).includes('review'));\nif (!target) throw new Error('Jira review transition is not available');\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+      },
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [2880, -140],
+      "id": "db640df6-4366-43fd-9195-e129907fab89", "name": "Select Review Transition"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2", "resource": "issue", "operation": "update",
+        "issueKey": "={{ $('Validate Review Command').item.json.jiraKey }}",
+        "updateFields": { "statusId": { "__rl": true, "value": "={{ $json.transitionId }}", "mode": "id" } }, "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira", "typeVersion": 1, "position": [3120, -140],
+      "id": "42a0ce71-b27d-4e51-8e0c-e5d4a58d968d", "name": "Return to In Review",
+      "credentials": { "jiraSoftwareCloudOAuth2Api": { "id": "KnO2tRxIhCMr6mXx", "name": "Jira SW Cloud account" } }
+    },
+    {
+      "parameters": { "jiraVersion": "cloudOAuth2", "resource": "issue", "operation": "transitions", "issueKey": "={{ $('Validate Review Command').item.json.jiraKey }}", "additionalFields": {} },
+      "type": "n8n-nodes-base.jira", "typeVersion": 1, "position": [2880, 140],
+      "id": "56b2764a-f80a-4993-87a1-08e6055dbdb7", "name": "Get Failure Transitions",
+      "credentials": { "jiraSoftwareCloudOAuth2Api": { "id": "KnO2tRxIhCMr6mXx", "name": "Jira SW Cloud account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst target = transitions.find((item) => normalize(item.json.to?.name ?? item.json.name) === 'todo')\n  ?? transitions.find((item) => item.json.to?.statusCategory?.key === 'new');\nif (!target) throw new Error('Jira To Do transition is not available');\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+      },
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [3120, 140],
+      "id": "dc492ef7-c32f-48d6-a97f-381ed1452829", "name": "Select Failure Transition"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2", "resource": "issue", "operation": "update",
+        "issueKey": "={{ $('Validate Review Command').item.json.jiraKey }}",
+        "updateFields": { "statusId": { "__rl": true, "value": "={{ $json.transitionId }}", "mode": "id" } }, "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira", "typeVersion": 1, "position": [3360, 140],
+      "id": "e7363e43-2aec-44ee-887e-7157b550e209", "name": "Return to To Do",
+      "credentials": { "jiraSoftwareCloudOAuth2Api": { "id": "KnO2tRxIhCMr6mXx", "name": "Jira SW Cloud account" } }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "GitHub Trigger": { "main": [[{ "node": "Validate Review Command", "type": "main", "index": 0 }]] },
+    "Validate Review Command": { "main": [[{ "node": "Get In Progress Transitions", "type": "main", "index": 0 }]] },
+    "Get In Progress Transitions": { "main": [[{ "node": "Select In Progress Transition", "type": "main", "index": 0 }]] },
+    "Select In Progress Transition": { "main": [[{ "node": "Move to In Progress", "type": "main", "index": 0 }]] },
+    "Move to In Progress": { "main": [[{ "node": "Comment Review Started", "type": "main", "index": 0 }]] },
+    "Comment Review Started": { "main": [[{ "node": "Create Review Job", "type": "main", "index": 0 }]] },
+    "Create Review Job": { "main": [[{ "node": "Wait Before Poll", "type": "main", "index": 0 }]] },
+    "Wait Before Poll": { "main": [[{ "node": "Get Review Job", "type": "main", "index": 0 }]] },
+    "Get Review Job": { "main": [[{ "node": "Review Completed?", "type": "main", "index": 0 }]] },
+    "Review Completed?": { "main": [[{ "node": "Comment Review Success", "type": "main", "index": 0 }], [{ "node": "Review Failed?", "type": "main", "index": 0 }]] },
+    "Review Failed?": { "main": [[{ "node": "Comment Review Failure", "type": "main", "index": 0 }], [{ "node": "Wait Before Poll", "type": "main", "index": 0 }]] },
+    "Comment Review Success": { "main": [[{ "node": "Get Review Transitions", "type": "main", "index": 0 }]] },
+    "Get Review Transitions": { "main": [[{ "node": "Select Review Transition", "type": "main", "index": 0 }]] },
+    "Select Review Transition": { "main": [[{ "node": "Return to In Review", "type": "main", "index": 0 }]] },
+    "Comment Review Failure": { "main": [[{ "node": "Get Failure Transitions", "type": "main", "index": 0 }]] },
+    "Get Failure Transitions": { "main": [[{ "node": "Select Failure Transition", "type": "main", "index": 0 }]] },
+    "Select Failure Transition": { "main": [[{ "node": "Return to To Do", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "binaryMode": "separate", "availableInMCP": false },
+  "versionId": "3ce18b54-1cf1-42d0-8311-89fb0478f636",
+  "meta": { "templateCredsSetupCompleted": false },
+  "tags": []
+}
