@@ -4,15 +4,22 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --create-home --shell /bin/bash codex
+# Delete the existing 'node' user so we can reuse UID 1000 for 'codex'
+RUN userdel -r node \
+  && useradd --uid 1000 --create-home --shell /bin/bash codex
 
-USER codex
 WORKDIR /app
+
+# Ensure we create these directories and set permissions so codex can write to them later
+RUN mkdir -p /work/repos /work/jobs && chown -R codex:codex /work
 
 COPY --chown=codex:codex package.json ./
 RUN npm install
 
 COPY --chown=codex:codex src ./src
+
+# Switching to the user before running the app
+USER codex
 
 ENV NODE_ENV=production
 ENV WORKER_PORT=3000

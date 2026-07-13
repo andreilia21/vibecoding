@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chown, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -12,9 +12,30 @@ const owner = process.env.GITHUB_OWNER;
 const repo = process.env.GITHUB_REPO;
 const defaultBaseBranch = process.env.DEFAULT_BASE_BRANCH || "main";
 const githubToken = process.env.GITHUB_TOKEN;
+const codexHome = process.env.CODEX_HOME || "/home/codex/.codex";
+const codexUid = 1000;
+const codexGid = 1000;
 
-await mkdir(reposDir, { recursive: true });
-await mkdir(jobsDir, { recursive: true });
+const githubAuthEnv = githubToken
+  ? {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+      GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${githubToken}`).toString("base64")}`,
+    }
+  : {};
+
+for (const directory of [codexHome, reposDir, jobsDir]) {
+  await mkdir(directory, { recursive: true });
+  if (process.getuid?.() === 0) {
+    await chown(directory, codexUid, codexGid);
+  }
+}
+
+if (process.getuid?.() === 0) {
+  process.setgroups([]);
+  process.setgid(codexGid);
+  process.setuid(codexUid);
+}
 
 function send(res, status, body) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -78,11 +99,19 @@ function run(command, args, options = {}) {
         resolve({ stdout, stderr });
       } else {
         const err = new Error(`${command} exited with code ${code}`);
+        err.exitCode = code;
         err.stdout = stdout;
         err.stderr = stderr;
         reject(err);
       }
     });
+  });
+}
+
+function runGit(args, options = {}) {
+  return run("git", args, {
+    ...options,
+    env: { ...githubAuthEnv, ...options.env },
   });
 }
 
@@ -100,20 +129,22 @@ async function runJob(id) {
     throw new Error("GITHUB_OWNER, GITHUB_REPO, and GITHUB_TOKEN must be configured");
   }
 
-  const repoDir = path.join(reposDir, `${owner}-${repo}`);
-  const authRepoUrl = `https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`;
+  // Each job gets its own checkout so concurrent Jira events cannot switch,
+  // stage, or commit files in another job's working tree.
+  const repoDir = path.join(reposDir, id);
+  const cloneRepoUrl = `https://github.com/${owner}/${repo}.git`;
   const publicRepoUrl = `https://github.com/${owner}/${repo}`;
   const baseBranch = job.baseBranch || defaultBaseBranch;
   const branch = `codex/${job.jiraKey}-${slug(job.summary)}`;
 
   if (!existsSync(repoDir)) {
-    await run("git", ["clone", authRepoUrl, repoDir]);
+    await runGit(["clone", cloneRepoUrl, repoDir]);
   }
 
-  await run("git", ["fetch", "origin"], { cwd: repoDir });
-  await run("git", ["switch", baseBranch], { cwd: repoDir });
-  await run("git", ["pull", "--ff-only", "origin", baseBranch], { cwd: repoDir });
-  await run("git", ["switch", "-C", branch], { cwd: repoDir });
+  await runGit(["fetch", "origin"], { cwd: repoDir });
+  await runGit(["switch", baseBranch], { cwd: repoDir });
+  await runGit(["pull", "--ff-only", "origin", baseBranch], { cwd: repoDir });
+  await runGit(["switch", "-C", branch], { cwd: repoDir });
 
   const prompt = [
     `Implement Jira issue ${job.jiraKey}.`,
@@ -138,19 +169,28 @@ async function runJob(id) {
   job = await updateJob(id, { step: "running codex", branch });
   await run("npx", ["codex", "exec", "--sandbox", "workspace-write", prompt], { cwd: repoDir });
 
-  await run("git", ["config", "user.name", "codex-agent"], { cwd: repoDir });
-  await run("git", ["config", "user.email", "codex-agent@users.noreply.github.com"], { cwd: repoDir });
-  await run("git", ["add", "."], { cwd: repoDir });
+  await runGit(["config", "user.name", "codex-agent"], { cwd: repoDir });
+  await runGit(["config", "user.email", "codex-agent@users.noreply.github.com"], { cwd: repoDir });
+  await runGit(["add", "."], { cwd: repoDir });
 
-  const diff = await run("git", ["diff", "--cached", "--quiet"], { cwd: repoDir }).catch((error) => error);
-  if (!diff || !diff.message) {
+  let hasChanges = false;
+  try {
+    await runGit(["diff", "--cached", "--quiet"], { cwd: repoDir });
+  } catch (error) {
+    if (error.exitCode !== 1) {
+      throw error;
+    }
+    hasChanges = true;
+  }
+
+  if (!hasChanges) {
     await updateJob(id, { status: "completed", step: "no changes", branch, prUrl: null });
     return;
   }
 
   await updateJob(id, { step: "committing changes" });
-  await run("git", ["commit", "-m", `${job.jiraKey}: implement requested change`], { cwd: repoDir });
-  await run("git", ["push", "-u", "origin", branch, "--force-with-lease"], { cwd: repoDir });
+  await runGit(["commit", "-m", `${job.jiraKey}: implement requested change`], { cwd: repoDir });
+  await runGit(["push", "-u", "origin", branch, "--force-with-lease"], { cwd: repoDir });
 
   await updateJob(id, { step: "creating pull request" });
   const prBody = JSON.stringify({
@@ -197,6 +237,44 @@ function startJob(job) {
     });
   });
 }
+
+async function failInterruptedJobs() {
+  const files = await readdir(jobsDir);
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+
+    try {
+      const job = await loadJob(file.slice(0, -5));
+      if (job.status === "queued" || job.status === "running") {
+        await updateJob(job.id, {
+          status: "failed",
+          step: "interrupted",
+          error: "Worker restarted before the job completed",
+        });
+      }
+    } catch (error) {
+      console.error(`Unable to recover job file ${file}:`, error);
+    }
+  }
+}
+
+async function sanitizeLegacyCheckout() {
+  if (!owner || !repo) return;
+
+  const legacyRepoDir = path.join(reposDir, `${owner}-${repo}`);
+  if (!existsSync(path.join(legacyRepoDir, ".git"))) return;
+
+  try {
+    await run("git", ["remote", "set-url", "origin", `https://github.com/${owner}/${repo}.git`], {
+      cwd: legacyRepoDir,
+    });
+  } catch (error) {
+    console.error("Unable to remove credentials from the legacy checkout:", error);
+  }
+}
+
+await sanitizeLegacyCheckout();
+await failInterruptedJobs();
 
 const server = createServer(async (req, res) => {
   try {

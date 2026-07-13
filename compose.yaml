@@ -1,7 +1,7 @@
 services:
   n8n:
     image: docker.n8n.io/n8nio/n8n
-    restart: always
+    restart: "on-failure:5"
     ports:
       - "127.0.0.1:5678:5678"
     environment:
@@ -21,7 +21,7 @@ services:
       - ./local-files:/files
   ngrok:
     image: ngrok/ngrok:latest
-    restart: always
+    restart: "on-failure:5"
     command:
       - "http"
       - "n8n:5678"
@@ -34,7 +34,7 @@ services:
   codex-worker:
     build:
       context: ./codex-worker
-    restart: always
+    restart: "on-failure:5"
     environment:
       - WORKER_PORT=3000
       - CODEX_HOME=/home/codex/.codex
