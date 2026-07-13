@@ -109,6 +109,17 @@ async function loadJob(id) {
   return job;
 }
 
+async function loadJobDetails(id) {
+  const job = await loadJob(id);
+  const [history, steps, actions, errors] = await Promise.all([
+    executionHistory.find({ jobId: id }, { projection: { _id: 0 } }).sort({ timestamp: 1 }).toArray(),
+    executionSteps.find({ jobId: id }, { projection: { _id: 0 } }).sort({ timestamp: 1 }).toArray(),
+    recordedActions.find({ jobId: id }, { projection: { _id: 0 } }).sort({ timestamp: 1 }).toArray(),
+    errorLogs.find({ jobId: id }, { projection: { _id: 0 } }).sort({ timestamp: 1 }).toArray(),
+  ]);
+  return { ...job, history, steps, actions, errors };
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const {
@@ -661,7 +672,15 @@ const server = createServer(async (req, res) => {
         .sort({ updatedAt: -1 })
         .limit(limit)
         .toArray();
-      send(res, 200, recentJobs);
+      const jobIds = recentJobs.map((job) => job.id);
+      const recentSteps = jobIds.length
+        ? await executionSteps
+          .find({ jobId: { $in: jobIds } }, { projection: { _id: 0 } })
+          .sort({ timestamp: 1 })
+          .toArray()
+        : [];
+      const stepsByJob = Map.groupBy(recentSteps, (step) => step.jobId);
+      send(res, 200, recentJobs.map((job) => ({ ...job, steps: stepsByJob.get(job.id) || [] })));
       return;
     }
 
@@ -705,9 +724,15 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const detailsMatch = url.pathname.match(/^\/jobs\/([^/]+)\/execution$/);
+    if (req.method === "GET" && detailsMatch) {
+      send(res, 200, await loadJobDetails(decodeURIComponent(detailsMatch[1])));
+      return;
+    }
+
     const match = url.pathname.match(/^\/jobs\/([^/]+)$/);
     if (req.method === "GET" && match) {
-      send(res, 200, await loadJob(match[1]));
+      send(res, 200, await loadJob(decodeURIComponent(match[1])));
       return;
     }
 
