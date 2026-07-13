@@ -29,6 +29,7 @@ This repository contains local Docker Compose infrastructure and automation glue
 - Do not copy `~/.codex/auth.json` into GitHub Actions or public CI.
 - Keep ports `5678`, `3000`, and `3001` bound to localhost. Do not expose `codex-worker`, `health-monitor`, or the Docker socket publicly.
 - Treat access to `/var/run/docker.sock` as privileged even when mounted read-only; do not expand monitor capabilities without reviewing the security impact.
+- Codex sessions launched by `codex-worker` have no Docker daemon or container access. They must not run Docker/Compose commands, inspect containers, or attempt container health checks; use available static checks and report Docker verification as not run.
 
 ## Verification
 
