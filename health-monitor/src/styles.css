@@ -17,3 +17,55 @@ body {
     radial-gradient(circle at 50% -20%, rgba(16, 185, 129, 0.12), transparent 35%),
     #09090b;
 }
+
+.accordion-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 200ms ease, opacity 200ms ease;
+}
+
+.accordion-content.is-expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.accordion-content > div {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.job-modal {
+  animation: popup-appear 200ms ease-out;
+}
+
+.event-count {
+  animation: count-pop 300ms ease-out;
+}
+
+@keyframes popup-appear {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes count-pop {
+  50% {
+    color: #6ee7b7;
+    transform: scale(1.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accordion-content,
+  .event-count,
+  .job-modal {
+    animation: none;
+    transition: none;
+  }
+}

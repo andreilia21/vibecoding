@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, Bot, CheckCircle2, ChevronDown, Clock3, ExternalLink, Radio, X, XCircle } from "lucide-react";
 import { Badge, Card, CardContent, CardHeader } from "./components/ui";
 
@@ -59,8 +59,14 @@ function WorkerCard({ worker, jobs }) {
   );
 }
 
-function JobCard({ job, onOpen }) {
-  const [expanded, setExpanded] = useState(false);
+function AccordionContent({ expanded, id, children }) {
+  return <div id={id} className={`accordion-content ${expanded ? "is-expanded" : ""}`} aria-hidden={!expanded}>
+    <div>{children}</div>
+  </div>;
+}
+
+function JobCard({ job, expanded, onToggle, onOpen }) {
+  const contentId = useId();
   const statusIcon = job.status === "completed" ? <CheckCircle2 className="h-4 w-4 text-emerald-400" />
     : job.status === "failed" ? <XCircle className="h-4 w-4 text-red-400" />
       : <Clock3 className="h-4 w-4 text-amber-400" />;
@@ -76,17 +82,17 @@ function JobCard({ job, onOpen }) {
         <div className="text-xs text-zinc-500 md:text-right"><p>{relativeTime(job.updatedAt)}</p><p className="mt-1">{job.steps?.length || 0} steps</p></div>
       </button>
       <div className="border-t border-zinc-800/70 bg-zinc-950/40">
-        <button type="button" className="flex w-full items-center justify-between px-6 py-3 text-left text-xs font-medium text-zinc-400 hover:text-zinc-200" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+        <button type="button" className="flex w-full items-center justify-between px-6 py-3 text-left text-xs font-medium text-zinc-400 hover:text-zinc-200" aria-expanded={expanded} aria-controls={contentId} onClick={onToggle}>
           Execution steps
           <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`} />
         </button>
-        {expanded && <ol className="space-y-3 px-6 pb-4">
+        <AccordionContent expanded={expanded} id={contentId}><ol className="space-y-3 px-6 pb-4">
           {job.steps?.length ? job.steps.map((step, index) => <li key={`${step.timestamp}-${index}`} className="grid grid-cols-[12px_1fr_auto] items-start gap-3 text-xs">
             <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500" />
             <div><p className="text-zinc-300">{step.step}</p><p className="mt-0.5 text-zinc-600">{dateTime(step.timestamp)}</p></div>
             <StatusBadge status={step.status} />
           </li>) : <li className="text-xs text-zinc-500">No step history recorded.</li>}
-        </ol>}
+        </ol></AccordionContent>
       </div>
     </div>
   );
@@ -107,10 +113,12 @@ function executionEvents(job) {
     ...(job.steps || []).map((event) => ({ ...event, kind: "Step", title: event.step })),
     ...actions.map((event) => ({ ...event, kind: event.level === "error" ? "Error" : "Action", title: event.message })),
     ...(job.errors || []).filter((event) => !actionKeys.has(`${event.timestamp}:${event.message}:${event.level}`)).map((event) => ({ ...event, kind: "Error", title: event.message })),
-  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 }
 
 function JobModal({ job, loading, error, onClose }) {
+  const [expandedEvent, setExpandedEvent] = useState(null);
+
   useEffect(() => {
     const onKeyDown = (event) => event.key === "Escape" && onClose();
     const overflow = document.body.style.overflow;
@@ -126,7 +134,7 @@ function JobModal({ job, loading, error, onClose }) {
   const jiraUrl = externalUrl(job.jiraUrl);
   const prUrl = externalUrl(job.prUrl);
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950" role="dialog" aria-modal="true" aria-labelledby="execution-title">
+    <div className="job-modal fixed inset-0 z-50 overflow-y-auto bg-zinc-950" role="dialog" aria-modal="true" aria-labelledby="execution-title">
       <header className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/95 px-4 py-4 backdrop-blur sm:px-8">
         <div className="mx-auto flex max-w-6xl items-start justify-between gap-4">
           <div><p className="text-sm font-medium text-emerald-400">{job.jiraKey}</p><h2 id="execution-title" className="mt-1 text-2xl font-semibold text-zinc-50">{job.summary}</h2></div>
@@ -141,15 +149,25 @@ function JobModal({ job, loading, error, onClose }) {
           <Card><CardContent className="p-5"><p className="text-xs uppercase tracking-wide text-zinc-500">Pull request</p>{prUrl ? <a className="mt-2 inline-flex items-center gap-1 text-sm text-emerald-400 hover:text-emerald-300" href={prUrl} target="_blank" rel="noreferrer">PR {job.prNumber ? `#${job.prNumber}` : "link"}<ExternalLink className="h-3.5 w-3.5" /></a> : <p className="mt-2 text-sm text-zinc-500">Not available</p>}</CardContent></Card>
         </section>
 
-        <section className="mt-8"><h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-zinc-500">Step breakdown</h3>
+        <section className="mt-8"><h3 className="mb-4 flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-zinc-500">Step breakdown <span key={events.length} className="event-count rounded-full bg-zinc-800 px-2 py-0.5 text-xs tabular-nums text-zinc-300" aria-live="polite">{events.length}</span></h3>
           {loading ? <Card><CardContent className="p-8 text-center text-sm text-zinc-500">Loading execution details…</CardContent></Card>
             : error ? <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400">{error}</div>
               : <Card><ol>{events.length ? events.map((event, index) => {
                 const details = eventDetails(event);
-                return <li key={`${event.kind}-${event.timestamp}-${index}`} className="grid gap-3 border-b border-zinc-800 px-6 py-5 last:border-0 sm:grid-cols-[90px_1fr_180px]">
-                  <span className={`text-xs font-medium uppercase tracking-wide ${event.kind === "Error" ? "text-red-400" : event.kind === "Step" ? "text-emerald-400" : "text-zinc-500"}`}>{event.kind}</span>
-                  <div className="min-w-0"><p className="break-words text-sm text-zinc-200">{event.title}</p>{event.status && <p className="mt-1 text-xs text-zinc-500">Status: {event.status}</p>}{details && <pre className={`mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md p-3 text-xs ${event.kind === "Error" ? "bg-red-500/10 text-red-300" : "bg-zinc-900 text-zinc-400"}`}>{details}</pre>}</div>
-                  <time className="text-xs text-zinc-500 sm:text-right" dateTime={event.timestamp}>{dateTime(event.timestamp)}</time>
+                const eventId = `event-${index}`;
+                const expanded = expandedEvent === index;
+                return <li key={`${event.kind}-${event.timestamp}-${index}`} className="border-b border-zinc-800 last:border-0">
+                  <button type="button" className="grid w-full gap-3 px-6 py-5 text-left hover:bg-zinc-900/50 sm:grid-cols-[90px_1fr_180px_auto]" aria-expanded={expanded} aria-controls={eventId} onClick={() => setExpandedEvent(expanded ? null : index)}>
+                    <span className={`text-xs font-medium uppercase tracking-wide ${event.kind === "Error" ? "text-red-400" : event.kind === "Step" ? "text-emerald-400" : "text-zinc-500"}`}>{event.kind}</span>
+                    <span className="min-w-0 break-words text-sm text-zinc-200">{event.title}</span>
+                    <time className="text-xs text-zinc-500 sm:text-right" dateTime={event.timestamp}>{dateTime(event.timestamp)}</time>
+                    <ChevronDown className={`h-4 w-4 text-zinc-500 transition-transform ${expanded ? "rotate-180" : ""}`} />
+                  </button>
+                  <AccordionContent expanded={expanded} id={eventId}><div className="px-6 pb-5 sm:ml-[102px] sm:mr-[212px]">
+                    {event.status && <p className="text-xs text-zinc-500">Status: {event.status}</p>}
+                    {details && <pre className={`mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md p-3 text-xs ${event.kind === "Error" ? "bg-red-500/10 text-red-300" : "bg-zinc-900 text-zinc-400"}`}>{details}</pre>}
+                    {!event.status && !details && <p className="text-xs text-zinc-500">No additional details recorded.</p>}
+                  </div></AccordionContent>
                 </li>;
               }) : <li className="p-10 text-center text-sm text-zinc-500">No execution events recorded.</li>}</ol></Card>}
         </section>
@@ -162,6 +180,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState(emptySnapshot);
   const [connected, setConnected] = useState(false);
   const [selectedJob, setSelectedJob] = useState(null);
+  const [expandedJobId, setExpandedJobId] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState(null);
   const detailsRequest = useRef(null);
@@ -202,6 +221,7 @@ export function App() {
 
   function openJob(job) {
     detailsRequest.current?.abort();
+    setExpandedJobId(null);
     setSelectedJob(job);
     setDetailsLoading(true);
     setDetailsError(null);
@@ -230,7 +250,7 @@ export function App() {
 
       <section className="mb-8"><h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-zinc-500">Active workers</h2><div className="grid gap-4 lg:grid-cols-2">{snapshot.workers.map((worker) => <WorkerCard key={worker.id} worker={worker} jobs={snapshot.jobs} />)}</div></section>
 
-      <section><h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-zinc-500">Previous executions</h2><Card>{snapshot.jobs.length ? snapshot.jobs.map((job) => <JobCard key={job.id} job={job} onOpen={openJob} />) : <div className="p-10 text-center text-sm text-zinc-500">No executions recorded yet.</div>}</Card></section>
+      <section><h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-zinc-500">Previous executions</h2><Card>{snapshot.jobs.length ? snapshot.jobs.map((job) => <JobCard key={job.id} job={job} expanded={expandedJobId === job.id} onToggle={() => setExpandedJobId((current) => current === job.id ? null : job.id)} onOpen={openJob} />) : <div className="p-10 text-center text-sm text-zinc-500">No executions recorded yet.</div>}</Card></section>
       {selectedJob && <JobModal job={selectedJob} loading={detailsLoading} error={detailsError} onClose={closeJob} />}
     </main>
   );
