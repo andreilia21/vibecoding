@@ -18,3 +18,5 @@ codex_worker_data/
 
 *.log
 *.tmp
+node_modules/
+dist/

@@ -58,6 +58,21 @@ services:
     depends_on:
       - n8n
 
+  health-monitor:
+    build:
+      context: ./health-monitor
+    restart: "on-failure:5"
+    environment:
+      - MONITOR_PORT=3001
+      - WORKER_PORT=3000
+      - REFRESH_INTERVAL_MS=2000
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - codex-worker
+
 volumes:
   n8n_data:
   codex_home:

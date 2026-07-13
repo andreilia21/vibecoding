@@ -13,6 +13,7 @@ const repo = process.env.GITHUB_REPO;
 const defaultBaseBranch = process.env.DEFAULT_BASE_BRANCH || "main";
 const githubToken = process.env.GITHUB_TOKEN;
 const codexHome = process.env.CODEX_HOME || "/home/codex/.codex";
+const workerId = process.env.HOSTNAME || "codex-worker";
 const codexBin = process.env.CODEX_BIN || "/app/node_modules/.bin/codex";
 const codexUid = 1000;
 const codexGid = 1000;
@@ -594,6 +595,7 @@ const server = createServer(async (req, res) => {
 
       const job = {
         id: crypto.randomUUID(),
+        workerId,
         status: "queued",
         step: "queued",
         jiraKey: body.jiraKey,
@@ -612,6 +614,19 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/jobs") {
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 100);
+      const files = await readdir(jobsDir);
+      const jobs = await Promise.all(
+        files
+          .filter((file) => file.endsWith(".json"))
+          .map(async (file) => loadJob(file.slice(0, -5))),
+      );
+      jobs.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+      send(res, 200, jobs.slice(0, limit));
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/review-jobs") {
       const body = await readBody(req);
       if (!body.jiraKey || !body.prNumber || !body.reviewCommandId || !body.requestedBy) {
@@ -627,6 +642,7 @@ const server = createServer(async (req, res) => {
 
       const job = {
         id: crypto.randomUUID(),
+        workerId,
         mode: "review",
         status: "queued",
         step: "queued",
