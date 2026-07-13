@@ -149,6 +149,23 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  const jobMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
+  if (req.method === "GET" && jobMatch) {
+    try {
+      if (snapshot.workers.length === 0) throw new Error("No active workers are available");
+      const jobId = encodeURIComponent(decodeURIComponent(jobMatch[1]));
+      const details = await Promise.any(snapshot.workers.map((worker) => (
+        getJson(`http://${worker.address}:${workerPort}/jobs/${jobId}/execution`)
+      )));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(details));
+    } catch (error) {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   try {
     const requested = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
     let file = path.resolve(distDir, requested);
