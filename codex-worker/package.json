@@ -7,6 +7,7 @@
     "start": "node src/server.js"
   },
   "dependencies": {
-    "@openai/codex": "latest"
+    "@openai/codex": "latest",
+    "mongodb": "^6.17.0"
   }
 }

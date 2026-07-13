@@ -10,8 +10,8 @@ RUN userdel -r node \
 
 WORKDIR /app
 
-# Ensure we create these directories and set permissions so codex can write to them later
-RUN mkdir -p /work/repos /work/jobs && chown -R codex:codex /work
+# Ensure we create this directory and set permissions so codex can write to it later
+RUN mkdir -p /work/repos && chown -R codex:codex /work
 
 COPY --chown=codex:codex package.json ./
 RUN npm install
@@ -24,7 +24,7 @@ ENV NODE_ENV=production
 ENV WORKER_PORT=3000
 ENV CODEX_HOME=/home/codex/.codex
 ENV REPOS_DIR=/work/repos
-ENV JOBS_DIR=/work/jobs
+ENV MONGO_URL=mongodb://job-db:27017/codex-worker
 
 EXPOSE 3000
 
