@@ -113,7 +113,7 @@ function executionEvents(job) {
     ...(job.steps || []).map((event) => ({ ...event, kind: "Step", title: event.step })),
     ...actions.map((event) => ({ ...event, kind: event.level === "error" ? "Error" : "Action", title: event.message })),
     ...(job.errors || []).filter((event) => !actionKeys.has(`${event.timestamp}:${event.message}:${event.level}`)).map((event) => ({ ...event, kind: "Error", title: event.message })),
-  ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 }
 
 function JobModal({ job, loading, error, onClose }) {
@@ -149,7 +149,7 @@ function JobModal({ job, loading, error, onClose }) {
           <Card><CardContent className="p-5"><p className="text-xs uppercase tracking-wide text-zinc-500">Pull request</p>{prUrl ? <a className="mt-2 inline-flex items-center gap-1 text-sm text-emerald-400 hover:text-emerald-300" href={prUrl} target="_blank" rel="noreferrer">PR {job.prNumber ? `#${job.prNumber}` : "link"}<ExternalLink className="h-3.5 w-3.5" /></a> : <p className="mt-2 text-sm text-zinc-500">Not available</p>}</CardContent></Card>
         </section>
 
-        <section className="mt-8"><h3 className="mb-4 text-sm font-medium uppercase tracking-wider text-zinc-500">Step breakdown</h3>
+        <section className="mt-8"><h3 className="mb-4 flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-zinc-500">Step breakdown <span key={events.length} className="event-count rounded-full bg-zinc-800 px-2 py-0.5 text-xs tabular-nums text-zinc-300" aria-live="polite">{events.length}</span></h3>
           {loading ? <Card><CardContent className="p-8 text-center text-sm text-zinc-500">Loading execution details…</CardContent></Card>
             : error ? <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400">{error}</div>
               : <Card><ol>{events.length ? events.map((event, index) => {

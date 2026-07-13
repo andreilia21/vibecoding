@@ -39,6 +39,10 @@ body {
   animation: popup-appear 200ms ease-out;
 }
 
+.event-count {
+  animation: count-pop 300ms ease-out;
+}
+
 @keyframes popup-appear {
   from {
     opacity: 0;
@@ -50,8 +54,16 @@ body {
   }
 }
 
+@keyframes count-pop {
+  50% {
+    color: #6ee7b7;
+    transform: scale(1.2);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .accordion-content,
+  .event-count,
   .job-modal {
     animation: none;
     transition: none;
