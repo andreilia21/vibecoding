@@ -16,6 +16,11 @@ services:
       - TZ=${GENERIC_TIMEZONE}
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
       - N8N_RESTRICT_FILE_ACCESS_TO=/files
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - JIRA_TODO_NAMES=${JIRA_TODO_NAMES:-To Do,К выполнению}
+      - JIRA_IN_PROGRESS_NAMES=${JIRA_IN_PROGRESS_NAMES:-In Progress,Start Progress,В работе}
+      - JIRA_IN_REVIEW_NAMES=${JIRA_IN_REVIEW_NAMES:-In Review,To Review,Review,Code Review,Ready for Review,В процессе проверки,На проверке}
+      - JIRA_DONE_NAMES=${JIRA_DONE_NAMES:-Done,Complete,Completed,Closed,Resolved,Готово,Выполнено,Завершено,Закрыто}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./local-files:/files

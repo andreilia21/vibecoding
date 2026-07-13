@@ -42,7 +42,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst target = transitions.find((item) => normalize(item.json.to?.name ?? item.json.name) === 'inprogress')\n  ?? transitions.find((item) => item.json.to?.statusCategory?.key === 'indeterminate');\nif (!target) {\n  const available = transitions.map((item) => `${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'}`).join(', ');\n  throw new Error(`Jira In Progress transition is not available. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9а-яё]/g, '');\nconst aliases = String($env.JIRA_IN_PROGRESS_NAMES ?? 'In Progress,Start Progress,В работе').split(',').map(normalize).filter(Boolean);\nconst target = transitions.find((item) => aliases.includes(normalize(item.json.name)) || aliases.includes(normalize(item.json.to?.name)));\nif (!target) {\n  const available = transitions.map((item) => `${item.json.id}: ${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'} [category ${item.json.to?.statusCategory?.key ?? 'unknown'}]`).join(', ');\n  throw new Error(`Jira In Progress transition is not available. Configured aliases: ${aliases.join(', ') || 'none'}. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -166,7 +166,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst target = transitions.find((item) => ['inreview', 'review', 'codereview', 'readyforreview'].includes(normalize(item.json.to?.name ?? item.json.name)))\n  ?? transitions.find((item) => normalize(item.json.to?.name ?? item.json.name).includes('review'));\nif (!target) throw new Error('Jira review transition is not available');\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9а-яё]/g, '');\nconst aliases = String($env.JIRA_IN_REVIEW_NAMES ?? 'In Review,To Review,Review,Code Review,Ready for Review,В процессе проверки,На проверке').split(',').map(normalize).filter(Boolean);\nconst target = transitions.find((item) => aliases.includes(normalize(item.json.name)) || aliases.includes(normalize(item.json.to?.name)));\nif (!target) {\n  const available = transitions.map((item) => `${item.json.id}: ${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'} [category ${item.json.to?.statusCategory?.key ?? 'unknown'}]`).join(', ');\n  throw new Error(`Jira review transition is not available. Configured aliases: ${aliases.join(', ') || 'none'}. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
       },
       "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [2880, -140],
       "id": "db640df6-4366-43fd-9195-e129907fab89", "name": "Select Review Transition"
@@ -189,7 +189,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst target = transitions.find((item) => normalize(item.json.to?.name ?? item.json.name) === 'todo')\n  ?? transitions.find((item) => item.json.to?.statusCategory?.key === 'new');\nif (!target) throw new Error('Jira To Do transition is not available');\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9а-яё]/g, '');\nconst aliases = String($env.JIRA_TODO_NAMES ?? 'To Do,К выполнению').split(',').map(normalize).filter(Boolean);\nconst target = transitions.find((item) => item.json.to?.statusCategory?.key === 'new')\n  ?? transitions.find((item) => aliases.includes(normalize(item.json.name)) || aliases.includes(normalize(item.json.to?.name)));\nif (!target) {\n  const available = transitions.map((item) => `${item.json.id}: ${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'} [category ${item.json.to?.statusCategory?.key ?? 'unknown'}]`).join(', ');\n  throw new Error(`Jira To Do transition is not available. Configured aliases: ${aliases.join(', ') || 'none'}. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
       },
       "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [3120, 140],
       "id": "dc492ef7-c32f-48d6-a97f-381ed1452829", "name": "Select Failure Transition"

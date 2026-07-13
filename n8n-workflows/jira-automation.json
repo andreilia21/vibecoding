@@ -313,7 +313,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst preferredNames = ['inreview', 'review', 'codereview', 'readyforreview'];\nconst target = transitions.find((item) => preferredNames.includes(normalize(item.json.to?.name ?? item.json.name)))\n  ?? transitions.find((item) => normalize(item.json.to?.name ?? item.json.name).includes('review'));\nif (!target) {\n  const available = transitions.map((item) => `${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'}`).join(', ');\n  throw new Error(`Jira review transition is not available. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9а-яё]/g, '');\nconst aliases = String($env.JIRA_IN_REVIEW_NAMES ?? 'In Review,To Review,Review,Code Review,Ready for Review,В процессе проверки,На проверке').split(',').map(normalize).filter(Boolean);\nconst target = transitions.find((item) => aliases.includes(normalize(item.json.name)) || aliases.includes(normalize(item.json.to?.name)));\nif (!target) {\n  const available = transitions.map((item) => `${item.json.id}: ${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'} [category ${item.json.to?.statusCategory?.key ?? 'unknown'}]`).join(', ');\n  throw new Error(`Jira review transition is not available. Configured aliases: ${aliases.join(', ') || 'none'}. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -349,7 +349,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst target = transitions.find((item) => normalize(item.json.to?.name ?? item.json.name) === 'todo')\n  ?? transitions.find((item) => item.json.to?.statusCategory?.key === 'new');\nif (!target) {\n  const available = transitions.map((item) => `${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'}`).join(', ');\n  throw new Error(`Jira To Do transition is not available. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9а-яё]/g, '');\nconst aliases = String($env.JIRA_TODO_NAMES ?? 'To Do,К выполнению').split(',').map(normalize).filter(Boolean);\nconst target = transitions.find((item) => item.json.to?.statusCategory?.key === 'new')\n  ?? transitions.find((item) => aliases.includes(normalize(item.json.name)) || aliases.includes(normalize(item.json.to?.name)));\nif (!target) {\n  const available = transitions.map((item) => `${item.json.id}: ${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'} [category ${item.json.to?.statusCategory?.key ?? 'unknown'}]`).join(', ');\n  throw new Error(`Jira To Do transition is not available. Configured aliases: ${aliases.join(', ') || 'none'}. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,

@@ -1,0 +1,130 @@
+{
+  "name": "github_accept_pull_request",
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "accessToken",
+        "owner": { "__rl": true, "value": "YOUR_GITHUB_OWNER", "mode": "name" },
+        "repository": { "__rl": true, "value": "YOUR_GITHUB_REPO", "mode": "name" },
+        "events": ["pull_request"],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.githubTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "id": "11ce4d12-1324-49a3-9528-479d92c20b36",
+      "name": "GitHub Pull Request Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json.body ?? $json;\nconst pr = payload.pull_request ?? {};\n\nif (payload.action !== 'closed' || pr.merged !== true) {\n  return [];\n}\n\nconst branch = String(pr.head?.ref ?? '');\nif (!branch.startsWith('codex/')) {\n  return [];\n}\n\nconst sources = [pr.body, pr.title, branch].filter(Boolean).map(String);\nlet jiraKey = '';\nfor (const source of sources) {\n  const marker = source.match(/codex-jira-key:\\s*([A-Z][A-Z0-9]+-\\d+)/i);\n  const fallback = source.match(/\\b([A-Z][A-Z0-9]+-\\d+)\\b/i);\n  jiraKey = (marker?.[1] ?? fallback?.[1] ?? '').toUpperCase();\n  if (jiraKey) break;\n}\n\nif (!jiraKey) {\n  throw new Error(`Merged PR #${pr.number ?? 'unknown'} is not linked to Jira`);\n}\n\nreturn [{ json: {\n  jiraKey,\n  prNumber: Number(pr.number),\n  prUrl: String(pr.html_url ?? ''),\n  branch,\n  mergedBy: String(pr.merged_by?.login ?? payload.sender?.login ?? 'unknown'),\n  mergeCommitSha: String(pr.merge_commit_sha ?? '')\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0],
+      "id": "8844901a-bc55-49c7-a92e-c3a6226f54ec",
+      "name": "Validate Merged Codex PR"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issue",
+        "operation": "transitions",
+        "issueKey": "={{ $('Validate Merged Codex PR').item.json.jiraKey }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [520, 0],
+      "id": "40240a87-e59f-4b99-986a-37121ce1adf2",
+      "name": "Get Done Transitions",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9а-яё]/g, '');\nconst aliases = String($env.JIRA_DONE_NAMES ?? 'Done,Complete,Completed,Closed,Resolved,Готово,Выполнено,Завершено,Закрыто').split(',').map(normalize).filter(Boolean);\nconst target = transitions.find((item) => item.json.to?.statusCategory?.key === 'done')\n  ?? transitions.find((item) => aliases.includes(normalize(item.json.name)) || aliases.includes(normalize(item.json.to?.name)));\n\nif (!target) {\n  const available = transitions.map((item) => `${item.json.id}: ${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'} [category ${item.json.to?.statusCategory?.key ?? 'unknown'}]`).join(', ');\n  throw new Error(`Jira Done transition is not available. Configured aliases: ${aliases.join(', ') || 'none'}. Add and publish a transition from the issue's current status to a Done-category status. Available transitions: ${available || 'none'}`);\n}\n\nreturn [{ json: { transitionId: String(target.json.id), targetStatusName: String(target.json.to?.name ?? target.json.name ?? 'Done') } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 0],
+      "id": "9fa5873a-3a28-4138-a2bb-e46787c87bfd",
+      "name": "Select Done Transition"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issue",
+        "operation": "update",
+        "issueKey": "={{ $('Validate Merged Codex PR').item.json.jiraKey }}",
+        "updateFields": {
+          "statusId": { "__rl": true, "value": "={{ $json.transitionId }}", "mode": "id" }
+        },
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [1040, 0],
+      "id": "af2f2b57-bda5-4f90-8523-f536496469c6",
+      "name": "Move Jira Issue to Done",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issueComment",
+        "operation": "add",
+        "issueKey": "={{ $('Validate Merged Codex PR').item.json.jiraKey }}",
+        "comment": "={{ `Pull request #${$('Validate Merged Codex PR').item.json.prNumber} was merged by @${$('Validate Merged Codex PR').item.json.mergedBy}. The issue was moved to Done.\\n\\n${$('Validate Merged Codex PR').item.json.prUrl}${$('Validate Merged Codex PR').item.json.mergeCommitSha ? `\\nMerge commit: ${$('Validate Merged Codex PR').item.json.mergeCommitSha}` : ''}` }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [1300, 0],
+      "id": "fa257bdd-fe48-4ac8-8701-98413815aca9",
+      "name": "Comment Merged Pull Request",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "GitHub Pull Request Trigger": {
+      "main": [[{ "node": "Validate Merged Codex PR", "type": "main", "index": 0 }]]
+    },
+    "Validate Merged Codex PR": {
+      "main": [[{ "node": "Get Done Transitions", "type": "main", "index": 0 }]]
+    },
+    "Get Done Transitions": {
+      "main": [[{ "node": "Select Done Transition", "type": "main", "index": 0 }]]
+    },
+    "Select Done Transition": {
+      "main": [[{ "node": "Move Jira Issue to Done", "type": "main", "index": 0 }]]
+    },
+    "Move Jira Issue to Done": {
+      "main": [[{ "node": "Comment Merged Pull Request", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "60303b4c-87bd-475b-9fbe-654747f2d7e0",
+  "meta": { "templateCredsSetupCompleted": false },
+  "tags": []
+}
