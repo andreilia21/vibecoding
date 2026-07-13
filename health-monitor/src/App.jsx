@@ -100,19 +100,31 @@ function JobCard({ job, expanded, onToggle, onOpen }) {
 
 function eventDetails(event) {
   const details = Object.fromEntries(Object.entries(event).filter(([key, value]) => (
-    !["jobId", "timestamp", "level", "message", "step", "status", "kind", "title"].includes(key) && value !== undefined && value !== ""
+    !["jobId", "timestamp", "level", "message", "step", "status", "kind", "title", "eventKey"].includes(key) && value !== undefined && value !== ""
   )));
   return Object.keys(details).length ? JSON.stringify(details, null, 2) : null;
+}
+
+function actionTitle(event) {
+  if (event.message !== "Codex event") return event.message;
+  if (event.itemType === "agent_message") return "Codex message";
+  if (event.itemType === "command_execution") {
+    const eventType = event.eventType?.split(".").pop();
+    return ["started", "completed", "failed"].includes(eventType)
+      ? `Command execution ${eventType}`
+      : "Command execution";
+  }
+  return event.message;
 }
 
 function executionEvents(job) {
   const actions = job.actions || [];
   const actionKeys = new Set(actions.map((action) => `${action.timestamp}:${action.message}:${action.level}`));
   return [
-    ...(job.history || []).map((event) => ({ ...event, kind: "Status", title: `Status changed to ${event.status}` })),
-    ...(job.steps || []).map((event) => ({ ...event, kind: "Step", title: event.step })),
-    ...actions.map((event) => ({ ...event, kind: event.level === "error" ? "Error" : "Action", title: event.message })),
-    ...(job.errors || []).filter((event) => !actionKeys.has(`${event.timestamp}:${event.message}:${event.level}`)).map((event) => ({ ...event, kind: "Error", title: event.message })),
+    ...(job.history || []).map((event, index) => ({ ...event, eventKey: `history-${index}`, kind: "Status", title: `Status changed to ${event.status}` })),
+    ...(job.steps || []).map((event, index) => ({ ...event, eventKey: `step-${index}`, kind: "Step", title: event.step })),
+    ...actions.map((event, index) => ({ ...event, eventKey: `action-${index}`, kind: event.level === "error" ? "Error" : "Action", title: actionTitle(event) })),
+    ...(job.errors || []).filter((event) => !actionKeys.has(`${event.timestamp}:${event.message}:${event.level}`)).map((event, index) => ({ ...event, eventKey: `error-${index}`, kind: "Error", title: event.message })),
   ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 }
 
@@ -152,12 +164,12 @@ function JobModal({ job, loading, error, onClose }) {
         <section className="mt-8"><h3 className="mb-4 flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-zinc-500">Step breakdown <span key={events.length} className="event-count rounded-full bg-zinc-800 px-2 py-0.5 text-xs tabular-nums text-zinc-300" aria-live="polite">{events.length}</span></h3>
           {loading ? <Card><CardContent className="p-8 text-center text-sm text-zinc-500">Loading execution details…</CardContent></Card>
             : error ? <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400">{error}</div>
-              : <Card><ol>{events.length ? events.map((event, index) => {
+              : <Card><ol>{events.length ? events.map((event) => {
                 const details = eventDetails(event);
-                const eventId = `event-${index}`;
-                const expanded = expandedEvent === index;
-                return <li key={`${event.kind}-${event.timestamp}-${index}`} className="border-b border-zinc-800 last:border-0">
-                  <button type="button" className="grid w-full gap-3 px-6 py-5 text-left hover:bg-zinc-900/50 sm:grid-cols-[90px_1fr_180px_auto]" aria-expanded={expanded} aria-controls={eventId} onClick={() => setExpandedEvent(expanded ? null : index)}>
+                const eventId = `event-${event.eventKey}`;
+                const expanded = expandedEvent === event.eventKey;
+                return <li key={event.eventKey} className="border-b border-zinc-800 last:border-0">
+                  <button type="button" className="grid w-full gap-3 px-6 py-5 text-left hover:bg-zinc-900/50 sm:grid-cols-[90px_1fr_180px_auto]" aria-expanded={expanded} aria-controls={eventId} onClick={() => setExpandedEvent(expanded ? null : event.eventKey)}>
                     <span className={`text-xs font-medium uppercase tracking-wide ${event.kind === "Error" ? "text-red-400" : event.kind === "Step" ? "text-emerald-400" : "text-zinc-500"}`}>{event.kind}</span>
                     <span className="min-w-0 break-words text-sm text-zinc-200">{event.title}</span>
                     <time className="text-xs text-zinc-500 sm:text-right" dateTime={event.timestamp}>{dateTime(event.timestamp)}</time>
