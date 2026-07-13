@@ -174,26 +174,37 @@ export function App() {
     return () => events.close();
   }, []);
 
+  useEffect(() => {
+    if (!selectedJob) return;
+    const controller = new AbortController();
+    detailsRequest.current = controller;
+
+    async function refreshDetails() {
+      try {
+        const response = await fetch(`/api/jobs/${encodeURIComponent(selectedJob.id)}`, { signal: controller.signal });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        setSelectedJob(body);
+        setDetailsError(null);
+      } catch (error) {
+        if (error.name !== "AbortError") setDetailsError(error.message);
+      } finally {
+        if (detailsRequest.current === controller) setDetailsLoading(false);
+      }
+    }
+
+    refreshDetails();
+    return () => controller.abort();
+  }, [snapshot.updatedAt, selectedJob?.id]);
+
   const failedJobs = useMemo(() => snapshot.jobs.filter((job) => job.status === "failed").length, [snapshot.jobs]);
   const healthyWorkers = snapshot.workers.filter((worker) => worker.status === "healthy").length;
 
-  async function openJob(job) {
+  function openJob(job) {
     detailsRequest.current?.abort();
-    const controller = new AbortController();
-    detailsRequest.current = controller;
     setSelectedJob(job);
     setDetailsLoading(true);
     setDetailsError(null);
-    try {
-      const response = await fetch(`/api/jobs/${encodeURIComponent(job.id)}`, { signal: controller.signal });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      setSelectedJob(body);
-    } catch (error) {
-      if (error.name !== "AbortError") setDetailsError(error.message);
-    } finally {
-      if (detailsRequest.current === controller) setDetailsLoading(false);
-    }
   }
 
   function closeJob() {
