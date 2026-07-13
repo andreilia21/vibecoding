@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
 import { MongoClient } from "mongodb";
+import { AuthManager } from "./auth-manager.js";
 
 const port = Number(process.env.WORKER_PORT || 3000);
 const reposDir = process.env.REPOS_DIR || "/work/repos";
@@ -16,6 +17,7 @@ const githubToken = process.env.GITHUB_TOKEN;
 const codexHome = process.env.CODEX_HOME || "/home/codex/.codex";
 const workerId = process.env.HOSTNAME || "codex-worker";
 const codexBin = process.env.CODEX_BIN || "/app/node_modules/.bin/codex";
+const authLoginTimeoutMs = Number(process.env.AUTH_LOGIN_TIMEOUT_MS || 10 * 60 * 1000);
 const codexUid = 1000;
 const codexGid = 1000;
 const mongoClient = new MongoClient(mongoUrl);
@@ -57,6 +59,9 @@ if (process.getuid?.() === 0) {
   process.setgid(codexGid);
   process.setuid(codexUid);
 }
+
+const authManager = new AuthManager({ codexBin, codexHome, loginTimeoutMs: authLoginTimeoutMs });
+await authManager.initialize();
 
 function send(res, status, body) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -638,6 +643,33 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/healthz") {
       await database.command({ ping: 1 });
       send(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/auth/status") {
+      send(res, 200, await authManager.status({ force: url.searchParams.get("refresh") === "1" }));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/auth/login") {
+      const result = await authManager.start();
+      send(res, result.state === "error" ? 503 : result.reused ? 200 : 202, result);
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/auth/login") {
+      send(res, 200, await authManager.cancel());
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/auth/login/events") {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      });
+      const unsubscribe = authManager.subscribe((event) => res.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`));
+      req.on("close", unsubscribe);
       return;
     }
 

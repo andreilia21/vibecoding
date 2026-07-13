@@ -78,7 +78,7 @@ The Compose project contains four services:
    docker compose build --pull=false codex-worker
    ```
 
-6. Authenticate Codex interactively. The login state is stored in the persistent `codex_home` volume:
+6. Optionally authenticate Codex interactively. The login state is stored in the persistent `codex_home` volume:
 
    ```powershell
    docker compose run --rm codex-worker /app/node_modules/.bin/codex login
@@ -105,7 +105,7 @@ The Compose project contains four services:
    { "ok": true }
    ```
 
-   Open the health monitor at `http://127.0.0.1:3001`. It discovers running Compose `codex-worker` containers and refreshes the dashboard every two seconds.
+   Open the health monitor at `http://127.0.0.1:3001`. It discovers running Compose `codex-worker` containers and refreshes the dashboard every two seconds. Its **Codex authentication** section runs `codex login status` inside the worker. Select **Log in to ChatGPT** to start device authentication, open the displayed verification URL, and enter the user code. Progress updates automatically; select **Cancel login** to abandon an attempt or **Refresh** to run a new status check.
 
 9. Open n8n at the configured public URL and import `n8n-workflows/jira-automation.json`. Confirm its Jira credential and transition names, then activate it. It will:
 
@@ -158,6 +158,19 @@ Adjust `JIRA_TODO_NAMES`, `JIRA_IN_PROGRESS_NAMES`, `JIRA_IN_REVIEW_NAMES`, and 
 ```http
 GET /healthz
 ```
+
+### Codex authentication
+
+```http
+GET /auth/status
+POST /auth/login
+GET /auth/login/events
+DELETE /auth/login
+```
+
+`GET /auth/status` runs the supported `codex login status` command and reports only a safe state, message, and last successful check time. Add `?refresh=1` to bypass the short status cache. `POST /auth/login` starts `codex login --device-auth`; only one attempt can run at once, and a duplicate request reuses the active attempt. `GET /auth/login/events` streams allowlisted progress over SSE. `DELETE /auth/login` cancels the active attempt. An abandoned attempt times out after ten minutes by default.
+
+The worker only returns fixed progress messages, an allowlisted OpenAI HTTPS verification URL with query data removed, and the device user code. It never reads or returns `auth.json`, tokens, cookies, authorization headers, or raw CLI output. The health monitor only calls these internal worker endpoints and does not mount `codex_home`.
 
 ### Create a job
 
@@ -219,7 +232,7 @@ The worker validates the PR-to-Jira link and updates the existing PR branch. Git
 Docker named volumes preserve state when containers are recreated:
 
 - `n8n_data`: n8n database, workflows, credentials, and instance settings.
-- `codex_home`: persisted Codex login and configuration.
+- `codex_home`: persisted Codex login and configuration. Authentication remains owned by `codex-worker` and survives container recreation. Never inspect, copy, log, or expose `auth.json`; treat the volume and its backups as secret material.
 - `codex_worker_data`: job records and per-job repository checkouts.
 
 `docker compose down` keeps these volumes. `docker compose down -v` deletes them and must not be used unless permanent data removal is intended.
@@ -310,6 +323,8 @@ Run these checks before committing infrastructure changes:
 ```powershell
 node --check codex-worker/src/server.js
 node --check health-monitor/server.js
+npm --prefix codex-worker test
+npm --prefix health-monitor run build
 docker compose config
 ```
 

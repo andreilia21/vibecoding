@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, Bot, CheckCircle2, ChevronDown, Clock3, ExternalLink, Radio, X, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, Bot, CheckCircle2, ChevronDown, Clock3, ExternalLink, LogIn, Radio, RefreshCw, ShieldCheck, X, XCircle } from "lucide-react";
 import { Badge, Card, CardContent, CardHeader } from "./components/ui";
 
 const emptySnapshot = { workers: [], jobs: [], updatedAt: null, error: null };
@@ -15,14 +15,41 @@ function relativeTime(value) {
 }
 
 function StatusBadge({ status }) {
-  const variant = status === "healthy" || status === "completed"
+  const variant = status === "healthy" || status === "completed" || status === "authenticated"
     ? "default"
     : status === "failed" || status === "unhealthy"
       ? "destructive"
-      : status === "running"
+      : status === "running" || status === "login_pending" || status === "checking"
         ? "warning"
         : "secondary";
   return <Badge variant={variant}>{status}</Badge>;
+}
+
+function AuthCard({ auth, busy, error, onLogin, onCancel, onRefresh }) {
+  const loginUrl = externalUrl(auth?.login?.url);
+  const pending = auth?.state === "login_pending";
+  return <Card className="mb-8">
+    <CardHeader className="flex-row items-start justify-between space-y-0">
+      <div><div className="flex items-center gap-2 text-base font-semibold text-zinc-100"><ShieldCheck className="h-4 w-4" />Codex authentication</div><p className="mt-1 text-sm text-zinc-500">ChatGPT session owned by codex-worker</p></div>
+      <StatusBadge status={auth?.state || "checking"} />
+    </CardHeader>
+    <CardContent className="pt-0">
+      <p className="text-sm text-zinc-300">{auth?.message || "Checking Codex authentication."}</p>
+      <p className="mt-2 text-xs text-zinc-500">Last successful check: {auth?.checkedAt ? `${dateTime(auth.checkedAt)} (${relativeTime(auth.checkedAt)})` : "Never"}</p>
+      {auth?.state === "unauthenticated" && <div className="mt-4 flex gap-3 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-300"><AlertTriangle className="h-5 w-5 shrink-0" />Codex jobs cannot run until ChatGPT authentication is completed.</div>}
+      {error && <p className="mt-4 rounded-md bg-red-500/10 p-3 text-sm text-red-400">{error}</p>}
+      {pending && <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/60 p-4">
+        {loginUrl ? <a className="inline-flex items-center gap-1 text-sm font-medium text-emerald-400 hover:text-emerald-300" href={loginUrl} target="_blank" rel="noreferrer">Open ChatGPT verification<ExternalLink className="h-3.5 w-3.5" /></a> : <p className="text-sm text-zinc-400">Waiting for the verification URL…</p>}
+        {auth.login?.userCode && <div className="mt-3"><p className="text-xs text-zinc-500">User code</p><p className="mt-1 font-mono text-xl font-semibold tracking-widest text-zinc-100">{auth.login.userCode}</p></div>}
+        {auth.login?.expiresAt && <p className="mt-3 text-xs text-zinc-500">Attempt expires {dateTime(auth.login.expiresAt)}</p>}
+      </div>}
+      <div className="mt-5 flex flex-wrap gap-3">
+        {!pending && <button type="button" disabled={busy} onClick={onLogin} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"><LogIn className="h-4 w-4" />Log in to ChatGPT</button>}
+        {pending && <button type="button" disabled={busy} onClick={onCancel} className="rounded-md border border-red-500/30 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-50">Cancel login</button>}
+        <button type="button" disabled={busy || pending} onClick={onRefresh} className="inline-flex items-center gap-2 rounded-md border border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />Refresh</button>
+      </div>
+    </CardContent>
+  </Card>;
 }
 
 function dateTime(value) {
@@ -195,6 +222,9 @@ export function App() {
   const [expandedJobId, setExpandedJobId] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState(null);
+  const [authOverride, setAuthOverride] = useState(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState(null);
   const detailsRequest = useRef(null);
 
   useEffect(() => {
@@ -204,6 +234,27 @@ export function App() {
     events.onerror = () => setConnected(false);
     return () => events.close();
   }, []);
+
+  const workerAuth = snapshot.workers[0]?.auth;
+  const auth = authOverride || workerAuth || { state: "checking", message: "Waiting for an active worker.", checkedAt: null };
+
+  useEffect(() => {
+    if (workerAuth) setAuthOverride(workerAuth);
+  }, [workerAuth]);
+
+  useEffect(() => {
+    if (auth.state !== "login_pending") return;
+    const events = new EventSource("/api/auth/login/events");
+    events.onmessage = (event) => {
+      const update = JSON.parse(event.data);
+      if (update.type === "progress") {
+        setAuthOverride((current) => ({ ...current, message: update.message, login: { ...current?.login, url: update.url, userCode: update.userCode } }));
+      } else if (["complete", "cancelled", "timeout", "error"].includes(update.type)) {
+        refreshAuth();
+      }
+    };
+    return () => events.close();
+  }, [auth.state]);
 
   useEffect(() => {
     if (!selectedJob) return;
@@ -245,6 +296,25 @@ export function App() {
     setSelectedJob(null);
   }
 
+  async function authAction(method, pathname) {
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const response = await fetch(pathname, { method });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || body.message || `HTTP ${response.status}`);
+      setAuthOverride(body);
+    } catch (error) {
+      setAuthError(error.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  function refreshAuth() {
+    return authAction("GET", "/api/auth/status?refresh=1");
+  }
+
   return (
     <main className="mx-auto min-h-screen max-w-7xl px-4 py-8 sm:px-8">
       <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -259,6 +329,8 @@ export function App() {
         <Card><CardContent className="flex items-center justify-between p-6"><div><p className="text-sm text-zinc-500">Executions</p><p className="mt-1 text-2xl font-semibold">{snapshot.jobs.length}</p></div><Clock3 className="h-6 w-6 text-zinc-400" /></CardContent></Card>
         <Card><CardContent className="flex items-center justify-between p-6"><div><p className="text-sm text-zinc-500">Failed</p><p className="mt-1 text-2xl font-semibold">{failedJobs}</p></div><XCircle className="h-6 w-6 text-red-400" /></CardContent></Card>
       </section>
+
+      <AuthCard auth={auth} busy={authBusy} error={authError} onLogin={() => authAction("POST", "/api/auth/login")} onCancel={() => authAction("DELETE", "/api/auth/login")} onRefresh={refreshAuth} />
 
       <section className="mb-8"><h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-zinc-500">Active workers</h2><div className="grid gap-4 lg:grid-cols-2">{snapshot.workers.map((worker) => <WorkerCard key={worker.id} worker={worker} jobs={snapshot.jobs} />)}</div></section>
 

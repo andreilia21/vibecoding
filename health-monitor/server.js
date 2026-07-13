@@ -41,6 +41,23 @@ async function getJson(url) {
   return response.json();
 }
 
+function activeWorker() {
+  const worker = snapshot.workers.find((candidate) => candidate.status === "healthy") || snapshot.workers[0];
+  if (!worker) throw new Error("No active workers are available");
+  return worker;
+}
+
+async function workerAuthRequest(pathname, method = "GET") {
+  const worker = activeWorker();
+  const response = await fetch(`http://${worker.address}:${workerPort}${pathname}`, {
+    method,
+    signal: AbortSignal.timeout(pathname.startsWith("/auth/status") ? 12000 : 5000),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || body.message || `Worker returned HTTP ${response.status}`);
+  return { status: response.status, body };
+}
+
 async function discoverWorkers() {
   const filters = encodeURIComponent(JSON.stringify({
     label: ["com.docker.compose.service=codex-worker"],
@@ -70,12 +87,17 @@ async function inspectWorker(worker) {
   const baseUrl = `http://${worker.address}:${workerPort}`;
   const checkedAt = new Date().toISOString();
   try {
-    const [health, jobs] = await Promise.all([
+    const [health, jobs, auth] = await Promise.all([
       getJson(`${baseUrl}/healthz`),
       getJson(`${baseUrl}/jobs?limit=100`),
+      getJson(`${baseUrl}/auth/status`).catch((error) => ({
+        state: "error",
+        message: `Authentication status unavailable: ${error.message}`,
+        checkedAt: null,
+      })),
     ]);
     return {
-      worker: { ...worker, status: health.ok ? "healthy" : "unhealthy", checkedAt, error: null },
+      worker: { ...worker, status: health.ok ? "healthy" : "unhealthy", checkedAt, error: null, auth },
       jobs,
     };
   } catch (error) {
@@ -146,6 +168,67 @@ const server = createServer(async (req, res) => {
     res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
     clients.add(res);
     req.on("close", () => clients.delete(res));
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/auth/status") {
+    try {
+      const result = await workerAuthRequest(`/auth/status${url.searchParams.get("refresh") === "1" ? "?refresh=1" : ""}`);
+      res.writeHead(result.status, { "content-type": "application/json" });
+      res.end(JSON.stringify(result.body));
+      refresh();
+    } catch (error) {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (["POST", "DELETE"].includes(req.method) && url.pathname === "/api/auth/login") {
+    try {
+      const result = await workerAuthRequest("/auth/login", req.method);
+      res.writeHead(result.status, { "content-type": "application/json" });
+      res.end(JSON.stringify(result.body));
+      refresh();
+    } catch (error) {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/auth/login/events") {
+    try {
+      const worker = activeWorker();
+      const upstream = httpRequest({
+        hostname: worker.address,
+        port: workerPort,
+        path: "/auth/login/events",
+        method: "GET",
+      }, (upstreamResponse) => {
+        if (upstreamResponse.statusCode !== 200) {
+          res.writeHead(502, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: `Worker returned HTTP ${upstreamResponse.statusCode}` }));
+          upstreamResponse.resume();
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        upstreamResponse.pipe(res);
+      });
+      upstream.on("error", (error) => {
+        if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+        res.end(res.headersSent ? undefined : JSON.stringify({ error: error.message }));
+      });
+      req.on("close", () => upstream.destroy());
+      upstream.end();
+    } catch (error) {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message }));
+    }
     return;
   }
 
