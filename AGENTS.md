@@ -8,6 +8,7 @@ This repository contains local Docker Compose infrastructure and automation glue
 - `ngrok` exposes only the n8n webhook endpoint through a public HTTPS tunnel.
 - `codex-worker` runs the Codex CLI in isolated per-job checkouts with a persisted local ChatGPT login, pushes `codex/*` branches, and creates or updates pull requests.
 - `health-monitor` serves a local React dashboard on port `3001`, discovers Compose workers through a read-only Docker socket, and reads worker health and job history.
+- Codex authentication is detected by `codex-worker` with `codex login status`. The monitor starts `codex login --device-auth`, streams safe device-login progress, and can cancel the single active attempt; it never reads Codex credential files.
 
 ## Automation flow
 
@@ -27,6 +28,7 @@ This repository contains local Docker Compose infrastructure and automation glue
 - Preserve webhook signature validation and restrict command-triggered automation to authorized repository collaborators.
 - Do not auto-merge pull requests created by Codex.
 - Do not copy `~/.codex/auth.json` into GitHub Actions or public CI.
+- Keep Codex authentication owned by `codex-worker` in the persistent `codex_home` volume. Never read, expose, copy, return, or log `auth.json`, tokens, cookies, authorization headers, or unsanitized login output from monitor APIs.
 - Keep ports `5678`, `3000`, and `3001` bound to localhost. Do not expose `codex-worker`, `health-monitor`, or the Docker socket publicly.
 - Treat access to `/var/run/docker.sock` as privileged even when mounted read-only; do not expand monitor capabilities without reviewing the security impact.
 - Codex sessions launched by `codex-worker` have no Docker daemon or container access. They must not run Docker/Compose commands, inspect containers, or attempt container health checks; use available static checks and report Docker verification as not run.
