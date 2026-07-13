@@ -105,13 +105,25 @@ function eventDetails(event) {
   return Object.keys(details).length ? JSON.stringify(details, null, 2) : null;
 }
 
+function actionTitle(event) {
+  if (event.message !== "Codex event") return event.message;
+  if (event.itemType === "agent_message") return "Codex message";
+  if (event.itemType === "command_execution") {
+    const eventType = event.eventType?.split(".").pop();
+    return ["started", "completed", "failed"].includes(eventType)
+      ? `Command execution ${eventType}`
+      : "Command execution";
+  }
+  return event.message;
+}
+
 function executionEvents(job) {
   const actions = job.actions || [];
   const actionKeys = new Set(actions.map((action) => `${action.timestamp}:${action.message}:${action.level}`));
   return [
     ...(job.history || []).map((event) => ({ ...event, kind: "Status", title: `Status changed to ${event.status}` })),
     ...(job.steps || []).map((event) => ({ ...event, kind: "Step", title: event.step })),
-    ...actions.map((event) => ({ ...event, kind: event.level === "error" ? "Error" : "Action", title: event.message })),
+    ...actions.map((event) => ({ ...event, kind: event.level === "error" ? "Error" : "Action", title: actionTitle(event) })),
     ...(job.errors || []).filter((event) => !actionKeys.has(`${event.timestamp}:${event.message}:${event.level}`)).map((event) => ({ ...event, kind: "Error", title: event.message })),
   ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 }
