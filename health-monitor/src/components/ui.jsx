@@ -11,7 +11,7 @@ export function CardHeader({ className, children }) {
 }
 
 export function CardContent({ className, children }) {
-  return <div className={cn("p-6 pt-0", className)}>{children}</div>;
+  return <div className={cn("p-6", className)}>{children}</div>;
 }
 
 export function Badge({ variant = "default", children }) {
