@@ -49,7 +49,7 @@ function WorkerCard({ worker, jobs }) {
         </div>
         <StatusBadge status={worker.status} />
       </CardHeader>
-      <CardContent className="grid grid-cols-2 gap-4 text-sm">
+      <CardContent className="grid grid-cols-2 gap-4 pt-0 text-sm">
         <div><p className="text-zinc-500">Active jobs</p><p className="mt-1 text-xl font-semibold text-zinc-100">{active}</p></div>
         <div><p className="text-zinc-500">Last check</p><p className="mt-1 text-zinc-300">{relativeTime(worker.checkedAt)}</p></div>
         <p className="col-span-2 truncate text-xs text-zinc-500">{worker.dockerStatus}</p>
