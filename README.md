@@ -2,22 +2,25 @@
 
 Local Docker Compose infrastructure for turning selected Jira issues into GitHub pull requests with n8n and the Codex CLI.
 
-Jira sends webhook events to n8n through an ngrok HTTPS tunnel. An n8n workflow decides whether an issue should be handled, submits it to the internal `codex-worker` service, polls the job status, and reports the result back to Jira. The worker runs Codex in an isolated checkout, commits the generated changes, pushes a `codex/*` branch, and opens a pull request. Pull requests are never merged automatically.
+Jira sends webhook events to n8n through an ngrok HTTPS tunnel. An n8n workflow decides whether an issue should be handled, submits it to the internal `codex-worker` service, polls the job status, and reports the result back to Jira. The worker runs Codex in an isolated checkout, commits the generated changes, pushes a `codex/*` branch, and opens a pull request. The local health monitor shows live worker health and execution history. Pull requests are never merged automatically.
 
 ## Architecture
 
 ```text
 Jira -> ngrok -> n8n -> codex-worker -> Codex CLI
-                    |          |
+                    |          |       ^
+                    |          |       |
+                    |          |   health-monitor
                     |          +-> GitHub branch and pull request
                     +-> Jira comment and transition
 ```
 
-The Compose project contains three services:
+The Compose project contains four services:
 
 - `n8n`: workflow orchestration and Jira integration.
 - `ngrok`: public HTTPS tunnel to the local n8n webhook endpoint.
 - `codex-worker`: local job API that runs Codex and creates GitHub pull requests.
+- `health-monitor`: local React dashboard for active workers, failures, and previous executions.
 
 ## Prerequisites
 
@@ -97,6 +100,8 @@ The Compose project contains three services:
    { "ok": true }
    ```
 
+   Open the health monitor at `http://127.0.0.1:3001`. It discovers running Compose `codex-worker` containers and refreshes the dashboard every two seconds.
+
 9. Open n8n at the configured public URL and create or import the workflow. The workflow definition is not currently included in this repository. Configure it to:
 
    - receive and validate Jira webhook events;
@@ -145,6 +150,14 @@ GET /jobs/<job-id>
 
 A completed job includes its branch and pull request URL. A failed job includes an error message and the tail of stderr. Jobs interrupted by a worker restart are marked as failed instead of remaining stuck in a running state.
 
+### List jobs
+
+```http
+GET /jobs?limit=50
+```
+
+Returns the most recently updated persisted jobs. The health monitor uses this endpoint for execution history and error details.
+
 ## Persistence and backups
 
 Docker named volumes preserve state when containers are recreated:
@@ -166,6 +179,7 @@ docker compose ps
 docker compose logs -f n8n
 docker compose logs -f ngrok
 docker compose logs -f codex-worker
+docker compose logs -f health-monitor
 ```
 
 Recreate containers after configuration changes:
@@ -193,7 +207,8 @@ Each service uses `on-failure:5`, limiting automatic restart loops to five attem
 
 - Never commit `.env`, GitHub tokens, ngrok tokens, Jira credentials, OAuth credentials, or Codex authentication files.
 - Give the GitHub token access only to the target repository and only the permissions required for contents and pull requests.
-- Keep ports `5678` and `3000` bound to `127.0.0.1`. Jira should reach n8n only through ngrok.
+- Keep ports `5678`, `3000`, and `3001` bound to `127.0.0.1`. Jira should reach n8n only through ngrok.
+- The health monitor has read-only access to the local Docker socket for worker discovery. Keep it local and do not expose it publicly.
 - Validate Jira webhook requests in n8n before creating worker jobs.
 - Do not expose the worker API directly to the internet.
 - Review every generated pull request. The worker intentionally does not auto-merge.
@@ -235,6 +250,7 @@ Run these checks before committing infrastructure changes:
 
 ```powershell
 node --check codex-worker/src/server.js
+node --check health-monitor/server.js
 docker compose config
 ```
 
@@ -243,5 +259,7 @@ After changing worker files, also run:
 ```powershell
 docker compose build --pull=false codex-worker
 ```
+
+After changing the monitor, run `docker compose build health-monitor`.
 
 Keep changes small, surface automation failures back to Jira, and do not modify unrelated repositories or automatically merge generated pull requests.
