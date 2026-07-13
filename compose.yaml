@@ -45,7 +45,7 @@ services:
       - CODEX_HOME=/home/codex/.codex
       - CODEX_BIN=/app/node_modules/.bin/codex
       - REPOS_DIR=/work/repos
-      - JOBS_DIR=/work/jobs
+      - MONGO_URL=mongodb://job-db:27017/codex-worker
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_OWNER=${GITHUB_OWNER}
       - GITHUB_REPO=${GITHUB_REPO}
@@ -56,7 +56,21 @@ services:
       - codex_home:/home/codex/.codex
       - codex_worker_data:/work
     depends_on:
-      - n8n
+      n8n:
+        condition: service_started
+      job-db:
+        condition: service_healthy
+
+  job-db:
+    image: mongo:8.0
+    restart: "on-failure:5"
+    volumes:
+      - codex_job_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   health-monitor:
     build:
@@ -77,3 +91,4 @@ volumes:
   n8n_data:
   codex_home:
   codex_worker_data:
+  codex_job_data:

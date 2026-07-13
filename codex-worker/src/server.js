@@ -1,13 +1,14 @@
 import { createServer } from "node:http";
-import { chown, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { chown, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import crypto from "node:crypto";
+import { MongoClient } from "mongodb";
 
 const port = Number(process.env.WORKER_PORT || 3000);
 const reposDir = process.env.REPOS_DIR || "/work/repos";
-const jobsDir = process.env.JOBS_DIR || "/work/jobs";
+const mongoUrl = process.env.MONGO_URL || "mongodb://job-db:27017/codex-worker";
 const owner = process.env.GITHUB_OWNER;
 const repo = process.env.GITHUB_REPO;
 const defaultBaseBranch = process.env.DEFAULT_BASE_BRANCH || "main";
@@ -17,6 +18,24 @@ const workerId = process.env.HOSTNAME || "codex-worker";
 const codexBin = process.env.CODEX_BIN || "/app/node_modules/.bin/codex";
 const codexUid = 1000;
 const codexGid = 1000;
+const mongoClient = new MongoClient(mongoUrl);
+
+await mongoClient.connect();
+const database = mongoClient.db();
+const jobs = database.collection("jobs");
+const executionHistory = database.collection("execution_history");
+const executionSteps = database.collection("execution_steps");
+const errorLogs = database.collection("error_logs");
+const recordedActions = database.collection("recorded_actions");
+await Promise.all([
+  jobs.createIndex({ id: 1 }, { unique: true }),
+  jobs.createIndex({ updatedAt: -1 }),
+  jobs.createIndex({ mode: 1, reviewCommandId: 1 }),
+  executionHistory.createIndex({ jobId: 1, timestamp: 1 }),
+  executionSteps.createIndex({ jobId: 1, timestamp: 1 }),
+  errorLogs.createIndex({ jobId: 1, timestamp: 1 }),
+  recordedActions.createIndex({ jobId: 1, timestamp: 1 }),
+]);
 
 const githubAuthEnv = githubToken
   ? {
@@ -26,7 +45,7 @@ const githubAuthEnv = githubToken
     }
   : {};
 
-for (const directory of [codexHome, reposDir, jobsDir]) {
+for (const directory of [codexHome, reposDir]) {
   await mkdir(directory, { recursive: true });
   if (process.getuid?.() === 0) {
     await chown(directory, codexUid, codexGid);
@@ -68,15 +87,26 @@ function slug(value) {
 }
 
 async function saveJob(job) {
-  const file = path.join(jobsDir, `${job.id}.json`);
-  const tmp = `${file}.tmp`;
-  await writeFile(tmp, JSON.stringify(job, null, 2));
-  await rename(tmp, file);
+  await jobs.insertOne(job);
+  await Promise.all([
+    executionHistory.insertOne({
+      jobId: job.id,
+      status: job.status,
+      timestamp: job.createdAt,
+    }),
+    executionSteps.insertOne({
+      jobId: job.id,
+      step: job.step,
+      status: job.status,
+      timestamp: job.createdAt,
+    }),
+  ]);
 }
 
 async function loadJob(id) {
-  const file = path.join(jobsDir, `${id}.json`);
-  return JSON.parse(await readFile(file, "utf8"));
+  const job = await jobs.findOne({ id }, { projection: { _id: 0 } });
+  if (!job) throw new Error(`Job ${id} not found`);
+  return job;
 }
 
 function run(command, args, options = {}) {
@@ -182,6 +212,12 @@ function logJob(level, jobId, message, details = {}) {
   };
   const logger = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
   logger(JSON.stringify(entry));
+  return Promise.all([
+    recordedActions.insertOne(entry),
+    ...(level === "error" ? [errorLogs.insertOne(entry)] : []),
+  ]).catch((error) => {
+    console.error(`Unable to persist job log for ${jobId}:`, error);
+  });
 }
 
 function runGit(args, options = {}) {
@@ -212,16 +248,10 @@ async function githubApi(method, apiPath, body) {
 }
 
 async function findReviewJob(commandId) {
-  for (const file of await readdir(jobsDir)) {
-    if (!file.endsWith(".json")) continue;
-    try {
-      const job = await loadJob(file.slice(0, -5));
-      if (job.mode === "review" && String(job.reviewCommandId) === String(commandId)) return job;
-    } catch {
-      // Ignore an incomplete job file; saveJob uses an atomic rename for normal writes.
-    }
-  }
-  return null;
+  return jobs.findOne(
+    { mode: "review", reviewCommandId: String(commandId) },
+    { projection: { _id: 0 } },
+  );
 }
 
 function jiraKeyFromPullRequest(pullRequest) {
@@ -247,11 +277,25 @@ async function loadReviewContext(prNumber) {
 }
 
 async function updateJob(id, patch) {
-  const current = await loadJob(id);
-  const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
-  await saveJob(next);
+  const updatedAt = new Date().toISOString();
+  const result = await jobs.updateOne({ id }, { $set: { ...patch, updatedAt } });
+  if (result.matchedCount === 0) throw new Error(`Job ${id} not found`);
+  const next = await loadJob(id);
+  await Promise.all([
+    ...(patch.status ? [executionHistory.insertOne({
+      jobId: id,
+      status: next.status,
+      timestamp: updatedAt,
+    })] : []),
+    ...(patch.step ? [executionSteps.insertOne({
+      jobId: id,
+      step: next.step,
+      status: next.status,
+      timestamp: updatedAt,
+    })] : []),
+  ]);
   if (patch.status || patch.step) {
-    logJob(patch.status === "failed" ? "error" : "info", id, "Job state changed", {
+    await logJob(patch.status === "failed" ? "error" : "info", id, "Job state changed", {
       status: next.status,
       step: next.step,
       ...(patch.error ? { error: tail(patch.error) } : {}),
@@ -540,21 +584,16 @@ function startJob(job) {
 }
 
 async function failInterruptedJobs() {
-  const files = await readdir(jobsDir);
-  for (const file of files) {
-    if (!file.endsWith(".json")) continue;
-
+  const interruptedJobs = await jobs.find({ status: { $in: ["queued", "running"] } }).toArray();
+  for (const job of interruptedJobs) {
     try {
-      const job = await loadJob(file.slice(0, -5));
-      if (job.status === "queued" || job.status === "running") {
-        await updateJob(job.id, {
-          status: "failed",
-          step: "interrupted",
-          error: "Worker restarted before the job completed",
-        });
-      }
+      await updateJob(job.id, {
+        status: "failed",
+        step: "interrupted",
+        error: "Worker restarted before the job completed",
+      });
     } catch (error) {
-      console.error(`Unable to recover job file ${file}:`, error);
+      console.error(`Unable to recover job ${job.id}:`, error);
     }
   }
 }
@@ -582,6 +621,7 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     if (req.method === "GET" && url.pathname === "/healthz") {
+      await database.command({ ping: 1 });
       send(res, 200, { ok: true });
       return;
     }
@@ -616,14 +656,12 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/jobs") {
       const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 100);
-      const files = await readdir(jobsDir);
-      const jobs = await Promise.all(
-        files
-          .filter((file) => file.endsWith(".json"))
-          .map(async (file) => loadJob(file.slice(0, -5))),
-      );
-      jobs.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-      send(res, 200, jobs.slice(0, limit));
+      const recentJobs = await jobs
+        .find({}, { projection: { _id: 0 } })
+        .sort({ updatedAt: -1 })
+        .limit(limit)
+        .toArray();
+      send(res, 200, recentJobs);
       return;
     }
 
