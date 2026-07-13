@@ -108,6 +108,22 @@ function run(command, args, options = {}) {
   });
 }
 
+function tail(value, limit = 4000) {
+  return String(value || "").slice(-limit);
+}
+
+function logJob(level, jobId, message, details = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    jobId,
+    message,
+    ...details,
+  };
+  const logger = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+  logger(JSON.stringify(entry));
+}
+
 function runGit(args, options = {}) {
   return run("git", args, {
     ...options,
@@ -119,6 +135,13 @@ async function updateJob(id, patch) {
   const current = await loadJob(id);
   const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
   await saveJob(next);
+  if (patch.status || patch.step) {
+    logJob(patch.status === "failed" ? "error" : "info", id, "Job state changed", {
+      status: next.status,
+      step: next.step,
+      ...(patch.error ? { error: tail(patch.error) } : {}),
+    });
+  }
   return next;
 }
 
@@ -167,7 +190,15 @@ async function runJob(id) {
   ].join("\n");
 
   job = await updateJob(id, { step: "running codex", branch });
-  await run("npx", ["codex", "exec", "--sandbox", "workspace-write", prompt], { cwd: repoDir });
+  const codexResult = await run("npx", ["codex", "exec", "--sandbox", "workspace-write", prompt], {
+    cwd: repoDir,
+  });
+  const codexStdout = tail(codexResult.stdout, 8000);
+  const codexStderr = tail(codexResult.stderr, 8000);
+  logJob("info", id, "Codex command completed", {
+    stdout: codexStdout,
+    stderr: codexStderr,
+  });
 
   await runGit(["config", "user.name", "codex-agent"], { cwd: repoDir });
   await runGit(["config", "user.email", "codex-agent@users.noreply.github.com"], { cwd: repoDir });
@@ -184,7 +215,19 @@ async function runJob(id) {
   }
 
   if (!hasChanges) {
-    await updateJob(id, { status: "completed", step: "no changes", branch, prUrl: null });
+    logJob("warn", id, "Codex completed successfully but produced no Git changes", {
+      branch,
+      stdout: codexStdout,
+      stderr: codexStderr,
+    });
+    await updateJob(id, {
+      status: "completed",
+      step: "no changes",
+      branch,
+      prUrl: null,
+      codexStdout,
+      codexStderr,
+    });
     return;
   }
 
@@ -229,12 +272,29 @@ async function runJob(id) {
 
 function startJob(job) {
   runJob(job.id).catch(async (error) => {
-    await updateJob(job.id, {
-      status: "failed",
-      step: "failed",
+    const stdout = tail(error.stdout);
+    const stderr = tail(error.stderr);
+    logJob("error", job.id, "Job failed", {
       error: error.message,
-      stderr: String(error.stderr || "").slice(-4000),
+      exitCode: error.exitCode,
+      stdout,
+      stderr,
+      stack: tail(error.stack),
     });
+    try {
+      await updateJob(job.id, {
+        status: "failed",
+        step: "failed",
+        error: error.message,
+        stdout,
+        stderr,
+      });
+    } catch (updateError) {
+      logJob("error", job.id, "Unable to persist failed job state", {
+        error: updateError.message,
+        stack: tail(updateError.stack),
+      });
+    }
   });
 }
 
@@ -306,6 +366,7 @@ const server = createServer(async (req, res) => {
       };
 
       await saveJob(job);
+      logJob("info", job.id, "Job accepted", { jiraKey: job.jiraKey });
       startJob(job);
       send(res, 202, job);
       return;
@@ -319,6 +380,15 @@ const server = createServer(async (req, res) => {
 
     send(res, 404, { error: "not found" });
   } catch (error) {
+    console.error(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "error",
+      message: "Request handling failed",
+      method: req.method,
+      url: req.url,
+      error: error.message,
+      stack: tail(error.stack),
+    }));
     send(res, 500, { error: error.message });
   }
 });

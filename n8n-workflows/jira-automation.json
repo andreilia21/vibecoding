@@ -1,0 +1,423 @@
+{
+  "name": "jira-automation",
+  "nodes": [
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "events": [
+          "jira:issue_created",
+          "jira:issue_updated"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jiraTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a2bc3919-f664-478d-bf74-33863f57faf6",
+      "name": "Jira Trigger",
+      "webhookId": "f7c859ef-42d9-411c-b9d8-7710c3cd3ff6",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const issue = $json.issue ?? $json;\nconst fields = issue.fields ?? {};\nconst labels = Array.isArray(fields.labels) ? fields.labels.map(String) : [];\nconst normalizedLabels = labels.map((label) => label.toLowerCase());\nconst assignee = String(fields.assignee?.displayName ?? fields.assignee?.name ?? fields.assignee?.accountId ?? '').toLowerCase();\nconst status = String(fields.status?.name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\n\nconst requested = normalizedLabels.includes('codex-ready');\nconst selectedWorker = normalizedLabels.includes('codex-worker') || assignee === 'codex-worker';\nconst isTodo = status === 'todo';\nconst alreadyHandled = normalizedLabels.some((label) => ['codex-processing', 'codex-done'].includes(label));\n\nif (!requested || !selectedWorker || !isTodo || alreadyHandled) {\n  return [];\n}\n\nconst description = typeof fields.description === 'string'\n  ? fields.description\n  : JSON.stringify(fields.description ?? '');\nconst jiraUrl = String(issue.self ?? '').replace(/\\/rest\\/api\\/[^/]+\\/issue\\/.+$/, `/browse/${issue.key}`);\nconst baseLabels = labels.filter((label) => !['codex-ready', 'codex-processing', 'codex-done', 'codex-failed'].includes(label.toLowerCase()));\n\nreturn [{\n  json: {\n    jiraKey: issue.key,\n    summary: String(fields.summary ?? ''),\n    description,\n    jiraUrl,\n    baseLabels,\n    processingLabels: [...baseLabels, 'codex-processing'],\n    doneLabels: [...baseLabels, 'codex-done'],\n    failedLabels: [...baseLabels, 'codex-failed']\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "ed29673e-2289-41bd-9060-b9ca1e847be8",
+      "name": "Validate and Normalize Issue"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issue",
+        "operation": "update",
+        "issueKey": "={{ $json.jiraKey }}",
+        "updateFields": {
+          "labels": "={{ $json.processingLabels }}"
+        },
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        500,
+        0
+      ],
+      "id": "7b3e834f-fb38-43be-91cd-cdd2a073d231",
+      "name": "Mark as Processing",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://codex-worker:3000/jobs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jiraKey: $('Validate and Normalize Issue').item.json.jiraKey, summary: $('Validate and Normalize Issue').item.json.summary, description: $('Validate and Normalize Issue').item.json.description, jiraUrl: $('Validate and Normalize Issue').item.json.jiraUrl }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        760,
+        0
+      ],
+      "id": "ea2d4a23-a4d1-41ef-b319-14e6627b0870",
+      "name": "Create Codex Job"
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1020,
+        0
+      ],
+      "id": "a9a26410-407a-44d1-917a-c1544b594466",
+      "name": "Wait Before Poll",
+      "webhookId": "8bcbd6f5-46ac-4558-a82e-72d275b1915a"
+    },
+    {
+      "parameters": {
+        "url": "=http://codex-worker:3000/jobs/{{ $json.id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        0
+      ],
+      "id": "69d55ddc-a6df-448f-bb94-5ca5de687eda",
+      "name": "Get Codex Job"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "256ec5ab-55b5-4685-9bdd-61ff48fd9dcb",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        0
+      ],
+      "id": "e79a3cd3-4e23-463b-9a90-5385577cbabd",
+      "name": "Job Completed?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cd1534a0-e301-4427-98be-768538495ae8",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "failed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1780,
+        140
+      ],
+      "id": "b1fdddf0-26c2-4ca0-af8a-000a1759cfcb",
+      "name": "Job Failed?"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issueComment",
+        "operation": "add",
+        "issueKey": "={{ $('Validate and Normalize Issue').item.json.jiraKey }}",
+        "comment": "={{ $json.prUrl ? `Codex completed the task and opened a pull request: ${$json.prUrl}` : `Codex completed the task without creating a pull request (${ $json.step }).` }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        -140
+      ],
+      "id": "e2a725ce-9c58-42bc-9744-a67f026324b9",
+      "name": "Comment Success",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issue",
+        "operation": "update",
+        "issueKey": "={{ $('Validate and Normalize Issue').item.json.jiraKey }}",
+        "updateFields": {
+          "labels": "={{ $('Validate and Normalize Issue').item.json.doneLabels }}"
+        },
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        2040,
+        -140
+      ],
+      "id": "58760a26-84b3-4fe3-a725-06408f56d1c4",
+      "name": "Mark as Done",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issueComment",
+        "operation": "add",
+        "issueKey": "={{ $('Validate and Normalize Issue').item.json.jiraKey }}",
+        "comment": "={{ `Codex failed while processing this task: ${$json.error ?? 'Unknown worker error'}${$json.stderr ? `\\n\\n${$json.stderr}` : ''}` }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        2040,
+        140
+      ],
+      "id": "db498226-8d5e-4677-91f5-a1e2933c7fa1",
+      "name": "Comment Failure",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issue",
+        "operation": "update",
+        "issueKey": "={{ $('Validate and Normalize Issue').item.json.jiraKey }}",
+        "updateFields": {
+          "labels": "={{ $('Validate and Normalize Issue').item.json.failedLabels }}"
+        },
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        2300,
+        140
+      ],
+      "id": "2a0bd197-e14d-45bc-a1cd-591a8cbc986c",
+      "name": "Mark as Failed",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Jira Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate and Normalize Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Normalize Issue": {
+      "main": [
+        [
+          {
+            "node": "Mark as Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as Processing": {
+      "main": [
+        [
+          {
+            "node": "Create Codex Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Codex Job": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Poll",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Poll": {
+      "main": [
+        [
+          {
+            "node": "Get Codex Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Codex Job": {
+      "main": [
+        [
+          {
+            "node": "Job Completed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Completed?": {
+      "main": [
+        [
+          {
+            "node": "Comment Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Job Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Failed?": {
+      "main": [
+        [
+          {
+            "node": "Comment Failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Poll",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comment Success": {
+      "main": [
+        [
+          {
+            "node": "Mark as Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comment Failure": {
+      "main": [
+        [
+          {
+            "node": "Mark as Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "4e4a668f-a43c-49d8-b183-a8730995cf22",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "754969cbf5cd4b5d5021ce4cc7c7480fa1fbf062915127650ab1902c67837768"
+  },
+  "nodeGroups": [],
+  "id": "g73udF4xKMF2sGr5",
+  "tags": []
+}
