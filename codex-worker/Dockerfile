@@ -18,7 +18,8 @@ RUN npm install
 
 COPY --chown=codex:codex src ./src
 COPY docker-entrypoint.sh /usr/local/bin/codex-worker-entrypoint
-RUN chmod +x /usr/local/bin/codex-worker-entrypoint
+RUN sed -i 's/\r$//' /usr/local/bin/codex-worker-entrypoint \
+  && chmod +x /usr/local/bin/codex-worker-entrypoint
 
 ENV NODE_ENV=production
 ENV WORKER_PORT=3000
