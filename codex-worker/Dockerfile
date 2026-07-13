@@ -17,9 +17,8 @@ COPY --chown=codex:codex package.json ./
 RUN npm install
 
 COPY --chown=codex:codex src ./src
-
-# Switching to the user before running the app
-USER codex
+COPY docker-entrypoint.sh /usr/local/bin/codex-worker-entrypoint
+RUN chmod +x /usr/local/bin/codex-worker-entrypoint
 
 ENV NODE_ENV=production
 ENV WORKER_PORT=3000
@@ -29,4 +28,5 @@ ENV JOBS_DIR=/work/jobs
 
 EXPOSE 3000
 
+ENTRYPOINT ["codex-worker-entrypoint"]
 CMD ["npm", "start"]

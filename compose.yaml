@@ -38,6 +38,7 @@ services:
     environment:
       - WORKER_PORT=3000
       - CODEX_HOME=/home/codex/.codex
+      - CODEX_BIN=/app/node_modules/.bin/codex
       - REPOS_DIR=/work/repos
       - JOBS_DIR=/work/jobs
       - GITHUB_TOKEN=${GITHUB_TOKEN}

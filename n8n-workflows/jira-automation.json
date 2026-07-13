@@ -28,7 +28,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const issue = $json.issue ?? $json;\nconst fields = issue.fields ?? {};\nconst labels = Array.isArray(fields.labels) ? fields.labels.map(String) : [];\nconst normalizedLabels = labels.map((label) => label.toLowerCase());\nconst assignee = String(fields.assignee?.displayName ?? fields.assignee?.name ?? fields.assignee?.accountId ?? '').toLowerCase();\nconst status = String(fields.status?.name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\n\nconst requested = normalizedLabels.includes('codex-ready');\nconst selectedWorker = normalizedLabels.includes('codex-worker') || assignee === 'codex-worker';\nconst isTodo = status === 'todo';\nconst alreadyHandled = normalizedLabels.some((label) => ['codex-processing', 'codex-done'].includes(label));\n\nif (!requested || !selectedWorker || !isTodo || alreadyHandled) {\n  return [];\n}\n\nconst description = typeof fields.description === 'string'\n  ? fields.description\n  : JSON.stringify(fields.description ?? '');\nconst jiraUrl = String(issue.self ?? '').replace(/\\/rest\\/api\\/[^/]+\\/issue\\/.+$/, `/browse/${issue.key}`);\nconst baseLabels = labels.filter((label) => !['codex-ready', 'codex-processing', 'codex-done', 'codex-failed'].includes(label.toLowerCase()));\n\nreturn [{\n  json: {\n    jiraKey: issue.key,\n    summary: String(fields.summary ?? ''),\n    description,\n    jiraUrl,\n    baseLabels,\n    processingLabels: [...baseLabels, 'codex-processing'],\n    doneLabels: [...baseLabels, 'codex-done'],\n    failedLabels: [...baseLabels, 'codex-failed']\n  }\n}];"
+        "jsCode": "const issue = $json.issue ?? $json;\nconst fields = issue.fields ?? {};\nconst labels = Array.isArray(fields.labels) ? fields.labels.map(String) : [];\nconst normalizedLabels = labels.map((label) => label.toLowerCase());\nconst assignee = String(fields.assignee?.displayName ?? fields.assignee?.name ?? fields.assignee?.accountId ?? '').toLowerCase();\nconst status = String(fields.status?.name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\n\nconst selectedWorker = normalizedLabels.includes('codex-worker') || assignee === 'codex-worker';\nconst isInProgress = status === 'inprogress';\nconst alreadyHandled = normalizedLabels.some((label) => ['codex-processing', 'codex-done'].includes(label));\n\nif (!selectedWorker || !isInProgress || alreadyHandled) {\n  return [];\n}\n\nconst description = typeof fields.description === 'string'\n  ? fields.description\n  : JSON.stringify(fields.description ?? '');\nconst jiraUrl = String(issue.self ?? '').replace(/\\/rest\\/api\\/[^/]+\\/issue\\/.+$/, `/browse/${issue.key}`);\nconst baseLabels = labels.filter((label) => !['codex-ready', 'codex-processing', 'codex-done', 'codex-failed'].includes(label.toLowerCase()));\n\nreturn [{\n  json: {\n    jiraKey: issue.key,\n    summary: String(fields.summary ?? ''),\n    description,\n    jiraUrl,\n    baseLabels,\n    processingLabels: [...baseLabels, 'codex-processing'],\n    doneLabels: [...baseLabels, 'codex-done'],\n    failedLabels: [...baseLabels, 'codex-failed']\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -209,7 +209,12 @@
         "operation": "update",
         "issueKey": "={{ $('Validate and Normalize Issue').item.json.jiraKey }}",
         "updateFields": {
-          "labels": "={{ $('Validate and Normalize Issue').item.json.doneLabels }}"
+          "labels": "={{ $('Validate and Normalize Issue').item.json.doneLabels }}",
+          "statusId": {
+            "__rl": true,
+            "value": "={{ $json.transitionId }}",
+            "mode": "id"
+          }
         },
         "additionalFields": {}
       },
@@ -259,7 +264,12 @@
         "operation": "update",
         "issueKey": "={{ $('Validate and Normalize Issue').item.json.jiraKey }}",
         "updateFields": {
-          "labels": "={{ $('Validate and Normalize Issue').item.json.failedLabels }}"
+          "labels": "={{ $('Validate and Normalize Issue').item.json.failedLabels }}",
+          "statusId": {
+            "__rl": true,
+            "value": "={{ $json.transitionId }}",
+            "mode": "id"
+          }
         },
         "additionalFields": {}
       },
@@ -277,6 +287,78 @@
           "name": "Jira SW Cloud account"
         }
       }
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issue",
+        "operation": "transitions",
+        "issueKey": "={{ $('Validate and Normalize Issue').item.json.jiraKey }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        2040,
+        -260
+      ],
+      "id": "08c010d4-05fa-46aa-b67b-a64147b8c96b",
+      "name": "Get In Review Transitions",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst preferredNames = ['inreview', 'review', 'codereview', 'readyforreview'];\nconst target = transitions.find((item) => preferredNames.includes(normalize(item.json.to?.name ?? item.json.name)))\n  ?? transitions.find((item) => normalize(item.json.to?.name ?? item.json.name).includes('review'));\nif (!target) {\n  const available = transitions.map((item) => `${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'}`).join(', ');\n  throw new Error(`Jira review transition is not available. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2300,
+        -260
+      ],
+      "id": "ea64af33-072b-46c0-a2d6-0e7a24a9cf09",
+      "name": "Select In Review Transition"
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloudOAuth2",
+        "resource": "issue",
+        "operation": "transitions",
+        "issueKey": "={{ $('Validate and Normalize Issue').item.json.jiraKey }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        2300,
+        260
+      ],
+      "id": "0d8109ca-9fe2-46d5-9fda-8a924bb1dc44",
+      "name": "Get To Do Transitions",
+      "credentials": {
+        "jiraSoftwareCloudOAuth2Api": {
+          "id": "KnO2tRxIhCMr6mXx",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const transitions = $input.all();\nconst normalize = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst target = transitions.find((item) => normalize(item.json.to?.name ?? item.json.name) === 'todo')\n  ?? transitions.find((item) => item.json.to?.statusCategory?.key === 'new');\nif (!target) {\n  const available = transitions.map((item) => `${item.json.name ?? 'unnamed'} -> ${item.json.to?.name ?? 'unknown'}`).join(', ');\n  throw new Error(`Jira To Do transition is not available. Available transitions: ${available || 'none'}`);\n}\nreturn [{ json: { transitionId: String(target.json.id) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2560,
+        260
+      ],
+      "id": "9a13714f-b82d-4f9b-8690-dbcf2489d346",
+      "name": "Select To Do Transition"
     }
   ],
   "pinData": {},
@@ -387,7 +469,7 @@
       "main": [
         [
           {
-            "node": "Mark as Done",
+            "node": "Get In Review Transitions",
             "type": "main",
             "index": 0
           }
@@ -395,6 +477,50 @@
       ]
     },
     "Comment Failure": {
+      "main": [
+        [
+          {
+            "node": "Get To Do Transitions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get In Review Transitions": {
+      "main": [
+        [
+          {
+            "node": "Select In Review Transition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select In Review Transition": {
+      "main": [
+        [
+          {
+            "node": "Mark as Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get To Do Transitions": {
+      "main": [
+        [
+          {
+            "node": "Select To Do Transition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select To Do Transition": {
       "main": [
         [
           {
